@@ -1,0 +1,10 @@
+export const formatTime = (seconds) => {
+  const m = Math.floor(seconds / 60)
+  const s = seconds % 60
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+}
+
+export const formatMinutes = (seconds) => {
+  const m = Math.round(seconds / 60)
+  return `${m} min`
+}
