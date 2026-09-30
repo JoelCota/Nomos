@@ -9,13 +9,13 @@ import { createWidgetManager } from './widgets.js'
 import { createToastManager } from './toasts.js'
 import { openPanel, getPanel } from './panel.js'
 import { log, trimLog } from './log.js'
-import { IS_TEST } from './views.js'
+import { IS_TEST, TOAST_MS } from './views.js'
 
 // ---------------------------------------------------------------------------
 // Self-test runs against a fresh, isolated userData folder, seeded with data in
 // the old (v1) format so the migration is exercised too.
 if (IS_TEST) {
-  const testDir = join(app.getPath('temp'), 'pomodoro-widget-selftest')
+  const testDir = join(app.getPath('temp'), 'nomos-selftest')
   try {
     rmSync(testDir, { recursive: true, force: true })
   } catch {
@@ -23,7 +23,8 @@ if (IS_TEST) {
   }
   mkdirSync(testDir, { recursive: true })
   app.setPath('userData', testDir)
-  if (process.env.POMODORO_TEST_SEED !== '0') {
+  if (process.env.NOMOS_TEST_SEED !== '0') {
+    // Seeded under the old file name so the rename adoption and the v1 migration are both exercised.
     writeFileSync(
       join(testDir, 'pomodoro-widget.json'),
       JSON.stringify({
@@ -299,7 +300,7 @@ function buildTrayMenu() {
     { label: 'Salir', click: () => quitApp() }
   )
   tray.setContextMenu(Menu.buildFromTemplate(items))
-  tray.setToolTip(['Pomodoro Widget', ...status].join('\n'))
+  tray.setToolTip(['Nomos', ...status].join('\n'))
 }
 
 function createTray() {
@@ -380,7 +381,7 @@ const widgets = createWidgetManager({
   log
 })
 
-const toasts = createToastManager({ log, durationMs: Number(process.env.POMODORO_TOAST_MS) || 10000 })
+const toasts = createToastManager({ log, durationMs: TOAST_MS })
 
 // ---------------------------------------------------------------------------
 // App lifecycle
@@ -394,7 +395,7 @@ if (!hasLock) {
 
   app.whenReady().then(async () => {
     trimLog()
-    app.setAppUserModelId('com.aroco.pomodoro-widget')
+    app.setAppUserModelId('com.aroco.nomos')
     if (process.platform === 'darwin') app.dock?.hide()
 
     config = getConfig()

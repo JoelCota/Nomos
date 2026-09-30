@@ -9,7 +9,7 @@ const check = (channel) => {
 }
 
 contextBridge.exposeInMainWorld('api', {
-  isTest: process.argv.includes('--pomodoro-test'),
+  isTest: process.argv.includes('--nomos-test'),
   platform: process.platform,
   invoke: (channel, ...args) => {
     check(channel)

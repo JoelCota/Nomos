@@ -19,7 +19,7 @@ export function openPanel(page, theme = 'system') {
     height: 600,
     minWidth: 720,
     minHeight: 480,
-    title: 'Panel de control',
+    title: 'Nomos — Panel de control',
     show: false,
     autoHideMenuBar: true,
     backgroundColor: dark ? '#161618' : '#f5f5f7',

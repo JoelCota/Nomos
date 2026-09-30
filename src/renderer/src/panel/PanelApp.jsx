@@ -57,6 +57,7 @@ export default function PanelApp({ initialPage }) {
   return (
     <div data-testid="panel" className="flex h-screen text-fg">
       <nav aria-label="Secciones" className="flex w-[220px] shrink-0 flex-col gap-5 overflow-y-auto bg-sidebar px-3 py-5">
+        <p className="px-2.5 text-[17px] font-semibold tracking-tight">Nomos</p>
         <div>
           <p className="mb-1 px-2.5 text-[12px] font-semibold text-fg-3">Módulos</p>
           <NavItem active={page === 'modules'} onClick={() => setPage('modules')} icon="▦">

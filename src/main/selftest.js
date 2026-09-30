@@ -1,7 +1,8 @@
-// Automated self-test. Run with POMODORO_TEST=1 (see main/index.js): it uses an
+// Automated self-test. Run with NOMOS_TEST=1 (see main/index.js): it uses an
 // isolated userData folder seeded with v1 data, so real settings are untouched.
-// Results go to <temp>/pomodoro-widget-selftest/debug.log ("[test] PASS|FAIL").
-import { getData, hasStoreKey } from './store.js'
+// Results go to <temp>/nomos-selftest/debug.log ("[test] PASS|FAIL").
+import { getAdoptedFrom, getData, hasStoreKey } from './store.js'
+import { TOAST_MS } from './views.js'
 import { WIDGET_PAD, widgetWindowSize } from '../shared/config.js'
 
 export async function runSelfTest({ getConfig, updateModule, updateGeneral, toggleAllWidgets, widgets, toasts, services, showPanel, getPanel, log }) {
@@ -15,7 +16,8 @@ export async function runSelfTest({ getConfig, updateModule, updateGeneral, togg
 
   await sleep(3000)
 
-  // --- migration from v1 ---
+  // --- data from the old app name, then migration from v1 ---
+  check('datos de «Pomodoro Widget» adoptados por Nomos', /pomodoro-widget\.json$/.test(getAdoptedFrom() ?? ''), getAdoptedFrom())
   const cfg = getConfig()
   check('migración: duración del foco', cfg.modules.pomodoro.settings.durations.work === 30)
   check('migración: tema', cfg.general.theme === 'dark')
@@ -225,7 +227,7 @@ export async function runSelfTest({ getConfig, updateModule, updateGeneral, togg
   hb.tickReminders(now0)
   await sleep(1500)
   check('al parar el foco aparece', toasts.count() === 1 && hb.held() === 0)
-  await sleep(Number(process.env.POMODORO_TOAST_MS || 10000) + 1000)
+  await sleep(TOAST_MS + 1000)
   check('la tarjeta se cierra sola', toasts.count() === 0)
   svc.debug.reset()
 

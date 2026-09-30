@@ -1,6 +1,8 @@
 import { join } from 'path'
 
-export const IS_TEST = process.env.POMODORO_TEST === '1'
+// NOMOS_TEST=1 runs the self-test (POMODORO_TEST=1, the old name, still works).
+export const IS_TEST = process.env.NOMOS_TEST === '1' || process.env.POMODORO_TEST === '1'
+export const TOAST_MS = Number(process.env.NOMOS_TOAST_MS || process.env.POMODORO_TOAST_MS) || 10000
 
 export const preloadPath = () => join(import.meta.dirname, '../preload/index.js')
 
@@ -9,7 +11,7 @@ export const baseWebPreferences = () => ({
   contextIsolation: true,
   nodeIntegration: false,
   backgroundThrottling: false,
-  additionalArguments: IS_TEST ? ['--pomodoro-test'] : []
+  additionalArguments: IS_TEST ? ['--nomos-test'] : []
 })
 
 // All windows load the same renderer; `query` picks the view

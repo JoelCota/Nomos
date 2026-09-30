@@ -1,8 +1,8 @@
 {
-  "name": "pomodoro-widget",
-  "productName": "Pomodoro Widget",
+  "name": "nomos",
+  "productName": "Nomos",
   "version": "0.1.0",
-  "description": "A small always-on-top Pomodoro timer widget for the desktop.",
+  "description": "Widgets de escritorio estilo macOS: reloj, Pomodoro y hábitos con recordatorios.",
   "type": "module",
   "main": "out/main/index.js",
   "author": "aroco",
@@ -33,8 +33,8 @@
     "vite": "^5.4.11"
   },
   "build": {
-    "appId": "com.aroco.pomodoro-widget",
-    "productName": "Pomodoro Widget",
+    "appId": "com.aroco.nomos",
+    "productName": "Nomos",
     "directories": {
       "output": "release",
       "buildResources": "build"

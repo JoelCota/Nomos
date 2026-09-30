@@ -1,4 +1,7 @@
 import Store from 'electron-store'
+import { app } from 'electron'
+import { copyFileSync, existsSync, mkdirSync } from 'fs'
+import { join } from 'path'
 import { MANIFESTS } from '../modules/manifests.js'
 import { SCHEMA_VERSION, buildConfig, migrateV1 } from '../shared/config.js'
 import { mergeDeep } from '../shared/merge.js'
@@ -9,13 +12,44 @@ const V1_KEYS = ['settings', 'tasks', 'history', 'windowBounds']
 // store file is opened.
 let store = null
 let migrationInfo = null
+let adoptedFrom = null
+
+const STORE_NAME = 'nomos'
+
+// The app used to be called "Pomodoro Widget": its data lived in another
+// userData folder and file. On the first run as Nomos, copy it over (the old
+// file is left untouched as a backup).
+function adoptLegacyData() {
+  const userData = app.getPath('userData')
+  if (existsSync(join(userData, `${STORE_NAME}.json`))) return null
+  const candidates = [
+    join(userData, 'pomodoro-widget.json'),
+    join(app.getPath('appData'), 'Pomodoro Widget', 'pomodoro-widget.json'),
+    join(app.getPath('appData'), 'pomodoro-widget', 'pomodoro-widget.json')
+  ]
+  const source = candidates.find((p) => existsSync(p))
+  if (!source) return null
+  mkdirSync(userData, { recursive: true })
+  copyFileSync(source, join(userData, `${STORE_NAME}.json`))
+  return source
+}
 
 const getStore = () => {
   if (!store) {
-    store = new Store({ name: 'pomodoro-widget' })
+    try {
+      adoptedFrom = adoptLegacyData()
+    } catch {
+      adoptedFrom = null
+    }
+    store = new Store({ name: STORE_NAME })
     migrate(store)
   }
   return store
+}
+
+export const getAdoptedFrom = () => {
+  getStore()
+  return adoptedFrom
 }
 
 function migrate(st) {
