@@ -1,261 +1,361 @@
-import { app, BrowserWindow, Tray, Menu, ipcMain, Notification, globalShortcut, screen, nativeImage } from 'electron'
+import { app, BrowserWindow, Tray, Menu, ipcMain, Notification, globalShortcut, nativeImage } from 'electron'
 import { join } from 'path'
-import { existsSync, appendFileSync, writeFileSync, rmSync } from 'fs'
-import {
-  getSettings,
-  setSettings,
-  getTasks,
-  setTasks,
-  getHistory,
-  setHistory,
-  getWindowBounds,
-  setWindowBounds
-} from './store.js'
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs'
+import { MANIFESTS, getManifest } from '../modules/manifests.js'
+import { SERVICES } from '../modules/registry.main.js'
+import { GENERAL_DEFAULTS, LAYER_LABELS, SIZE_LABELS } from '../shared/config.js'
+import { getConfig, setGeneral, setModule, getData, setData } from './store.js'
+import { createWidgetManager } from './widgets.js'
+import { createToastManager } from './toasts.js'
+import { openPanel, getPanel } from './panel.js'
+import { log, trimLog } from './log.js'
+import { IS_TEST } from './views.js'
 
-const log = (msg) => {
+// ---------------------------------------------------------------------------
+// Self-test runs against a fresh, isolated userData folder, seeded with data in
+// the old (v1) format so the migration is exercised too.
+if (IS_TEST) {
+  const testDir = join(app.getPath('temp'), 'pomodoro-widget-selftest')
   try {
-    appendFileSync(join(app.getPath('userData'), 'debug.log'), `${new Date().toISOString()} ${msg}\n`)
+    rmSync(testDir, { recursive: true, force: true })
   } catch {
     /* ignore */
   }
+  mkdirSync(testDir, { recursive: true })
+  app.setPath('userData', testDir)
+  if (process.env.POMODORO_TEST_SEED !== '0') {
+    writeFileSync(
+      join(testDir, 'pomodoro-widget.json'),
+      JSON.stringify({
+        settings: { durations: { work: 30, short: 5, long: 15 }, theme: 'dark', opacity: 0.9, flipClock: true },
+        tasks: [{ id: 'seed-task', title: 'Tarea migrada', done: false, pomodoros: 2, createdAt: new Date().toISOString() }],
+        history: [],
+        windowBounds: { x: 300, y: 400, width: 320, height: 141 }
+      })
+    )
+  }
 }
 
-const WIDGET_SIZES = {
-  small: [280, 400],
-  medium: [320, 460],
-  large: [380, 540]
-}
-const SNAP_THRESHOLD = 60
-const CORNER_MARGIN = 0
+const CORNERS = ['top-left', 'top-right', 'bottom-left', 'bottom-right']
+const HEX = /^#[0-9a-f]{6}$/i
 
-let win = null
+let config = null
 let tray = null
-let timerStatus = { phase: 'work', label: '25:00' }
 let isQuitting = false
+const services = new Map() // moduleId -> service instance
+const moduleShortcuts = new Map() // moduleId -> [accelerators]
 
-const applyOpacity = (value, source = 'unknown') => {
-  if (!win || win.isDestroyed()) return
-  win.setOpacity(value)
-  log(`[main] setOpacity ${value} (${source})`)
+// ---------------------------------------------------------------------------
+// Window messaging
+
+const allWindows = () => {
+  const list = [...widgets.all(), ...toasts.windows()]
+  const panel = getPanel()
+  if (panel) list.push(panel)
+  return list
+}
+const sendToAll = (channel, payload) => {
+  for (const w of allWindows()) w.webContents.send(channel, payload)
 }
 
-const trayIconPath = () => {
-  const candidates = [
-    join(process.resourcesPath, 'resources', 'tray.png'),
-    join(app.getAppPath(), 'resources', 'tray.png')
-  ]
-  return candidates.find((p) => existsSync(p)) ?? null
-}
+// ---------------------------------------------------------------------------
+// Config pipeline: every change goes through commit(), which updates windows,
+// module services, shortcuts, the tray and every renderer.
 
-const getTrayIcon = () => {
-  const p = trayIconPath()
-  return p ? nativeImage.createFromPath(p) : nativeImage.createEmpty()
-}
+function commit(prev) {
+  config = getConfig()
+  widgets.sync(config)
 
-function createWindow() {
-  const settings = getSettings()
-  const [w, h] = WIDGET_SIZES[settings.widgetSize] ?? WIDGET_SIZES.medium
-  const saved = getWindowBounds()
-
-  const bounds = saved ?? defaultBounds(w, h)
-
-  win = new BrowserWindow({
-    ...bounds,
-    width: saved ? saved.width : w,
-    height: saved ? saved.height : h,
-    frame: false,
-    transparent: true,
-    backgroundColor: '#00000000',
-    resizable: false,
-    maximizable: false,
-    minimizable: false,
-    fullscreenable: false,
-    skipTaskbar: true,
-    show: false,
-    alwaysOnTop: settings.alwaysOnTop,
-    hasShadow: true,
-    webPreferences: {
-      preload: join(import.meta.dirname, '../preload/index.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      backgroundThrottling: false
+  for (const m of MANIFESTS) {
+    const was = prev ? prev.modules[m.id].enabled : false
+    const now = config.modules[m.id].enabled
+    const svc = services.get(m.id)
+    if (now && !was) {
+      svc?.start()
+      registerModuleShortcuts(m.id)
+    } else if (!now && was) {
+      svc?.stop()
+      unregisterModuleShortcuts(m.id)
+    } else if (now && svc && prev) {
+      const a = JSON.stringify(prev.modules[m.id].settings)
+      const b = JSON.stringify(config.modules[m.id].settings)
+      if (a !== b) svc.onSettingsChanged(config.modules[m.id].settings, prev.modules[m.id].settings)
     }
-  })
-
-  win.setAlwaysOnTop(settings.alwaysOnTop, 'screen-saver')
-  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
-  applyOpacity(1, 'create')
-
-  win.on('show', () => {
-    applyOpacity(1, 'show')
-    win.webContents.send('navigate:home')
-  })
-
-  const focusRevealAfter = Date.now() + 3000
-  win.on('focus', () => {
-    if (Date.now() < focusRevealAfter || Date.now() < suppressRevealUntil) return
-    win.webContents.send('chrome:reveal')
-  })
-
-  if (settings.clickThrough) {
-    win.setIgnoreMouseEvents(true, { forward: true })
   }
 
-  win.once('ready-to-show', () => {
-    applyOpacity(1, 'ready-to-show')
-    win.show()
-  })
-
-  win.webContents.on('did-finish-load', () => log('[main] renderer did-finish-load'))
-  win.webContents.on('did-fail-load', (_e, code, desc) => log('[main] did-fail-load', code, desc))
-
-  win.on('close', (event) => {
-    if (!isQuitting) {
-      event.preventDefault()
-      win.hide()
-    }
-  })
-
-  let moveTimer = null
-  const persistBounds = () => {
-    clearTimeout(moveTimer)
-    moveTimer = setTimeout(() => {
-      if (win && !win.isDestroyed()) setWindowBounds(win.getBounds())
-    }, 400)
+  if (prev && prev.general.launchAtLogin !== config.general.launchAtLogin) {
+    app.setLoginItemSettings({ openAtLogin: config.general.launchAtLogin })
   }
-  win.on('moved', () => {
-    persistBounds()
-    maybeSnap()
-  })
-  win.on('resized', persistBounds)
-
-  if (process.env.ELECTRON_RENDERER_URL) {
-    win.loadURL(process.env.ELECTRON_RENDERER_URL)
-  } else {
-    win.loadFile(join(import.meta.dirname, '../renderer/index.html'))
-  }
+  sendToAll('config:changed', config)
+  refreshTray()
 }
 
-function defaultBounds(w, h) {
-  const display = screen.getPrimaryDisplay()
-  const { x, y, width, height } = display.workArea
+function updateGeneral(patch) {
+  const prev = config
+  setGeneral(patch)
+  commit(prev)
+}
+
+function updateModule(id, patch) {
+  const prev = config
+  setModule(id, patch)
+  commit(prev)
+  if (patch.widget?.snapCorner) widgets.snapTo(id)
+}
+
+const setWidget = (id, widgetPatch) => updateModule(id, { widget: widgetPatch })
+const setModuleEnabled = (id, enabled) => updateModule(id, { enabled, widget: enabled ? { visible: true } : {} })
+
+// Tray click / Alt+Shift+O: hide every visible widget, or show them all again.
+function toggleAllWidgets() {
+  const enabled = MANIFESTS.filter((m) => config.modules[m.id].enabled)
+  if (!enabled.length) return
+  const anyVisible = enabled.some((m) => config.modules[m.id].widget.visible)
+  const prev = config
+  for (const m of enabled) setModule(m.id, { widget: { visible: !anyVisible } })
+  commit(prev)
+}
+
+// ---------------------------------------------------------------------------
+// Input validation for patches coming from renderers
+
+function cleanGeneral(p) {
+  const out = {}
+  if (!p || typeof p !== 'object') return out
+  if (['system', 'dark', 'light'].includes(p.theme)) out.theme = p.theme
+  if (typeof p.accent === 'string' && HEX.test(p.accent)) out.accent = p.accent
+  for (const k of ['launchAtLogin', 'clickThrough']) if (typeof p[k] === 'boolean') out[k] = p[k]
+  return out
+}
+
+function cleanModulePatch(id, p) {
+  const out = {}
+  if (!p || typeof p !== 'object') return out
+  if (typeof p.enabled === 'boolean') out.enabled = p.enabled
+  if (p.settings && typeof p.settings === 'object') out.settings = p.settings
+  if (p.widget && typeof p.widget === 'object') {
+    const w = p.widget
+    const ow = {}
+    if (typeof w.visible === 'boolean') ow.visible = w.visible
+    if (getManifest(id).sizes.includes(w.size)) ow.size = w.size
+    if (w.layer in LAYER_LABELS) ow.layer = w.layer
+    if (w.snapCorner === null || CORNERS.includes(w.snapCorner)) ow.snapCorner = w.snapCorner
+    if (typeof w.opacity === 'number') ow.opacity = Math.min(1, Math.max(0.3, w.opacity))
+    out.widget = ow
+  }
+  if (out.enabled === true) out.widget = { visible: true, ...(out.widget ?? {}) }
+  return out
+}
+
+// ---------------------------------------------------------------------------
+// Module services
+
+function createServiceContext(id) {
   return {
-    x: x + width - w - 24,
-    y: y + height - h - 24,
-    width: w,
-    height: h
+    id,
+    isTest: IS_TEST,
+    log,
+    getSettings: () => config.modules[id].settings,
+    data: {
+      get: (key, fallback) => getData(id, key, fallback),
+      set: (key, value) => setData(id, key, value)
+    },
+    handle: (name, fn) => ipcMain.handle(`${id}:${name}`, (_e, ...args) => fn(...args)),
+    broadcast: (event, payload) => sendToAll(`${id}:${event}`, payload),
+    notify: (title, body) => {
+      if (Notification.isSupported()) new Notification({ title, body, silent: true }).show()
+    },
+    refreshTray: () => refreshTray(),
+    // Show a notification card; onAction(actionId) runs when a button is pressed.
+    toast: (payload, onAction, onClose) => toasts.show({ module: id, ...payload }, onAction, onClose),
+    openPanel: (page) => showPanel(page),
+    // Another module's public API, or null when that module is disabled.
+    getService: (other) => (config.modules[other]?.enabled ? services.get(other)?.api ?? null : null)
   }
 }
 
-function maybeSnap() {
-  if (!win || win.isDestroyed()) return
-  const settings = getSettings()
-  if (!settings.snapCorner) return
-
-  const bounds = win.getBounds()
-  const display = screen.getDisplayMatching(bounds)
-  const { x, y, width, height } = display.workArea
-
-  const corners = {
-    'top-left': { x: x + CORNER_MARGIN, y: y + CORNER_MARGIN },
-    'top-right': { x: x + width - bounds.width - CORNER_MARGIN, y: y + CORNER_MARGIN },
-    'bottom-left': { x: x + CORNER_MARGIN, y: y + height - bounds.height - CORNER_MARGIN },
-    'bottom-right': { x: x + width - bounds.width - CORNER_MARGIN, y: y + height - bounds.height - CORNER_MARGIN }
+function registerModuleShortcuts(id) {
+  const svc = services.get(id)
+  if (!svc?.shortcuts) return
+  const registered = []
+  for (const [accel, fn] of Object.entries(svc.shortcuts)) {
+    if (globalShortcut.register(accel, fn)) registered.push(accel)
+    else log(`[main] shortcut ${accel} (${id}) could not be registered`)
   }
-  const target = corners[settings.snapCorner]
-  if (!target) return
-
-  const dist = Math.hypot(bounds.x - target.x, bounds.y - target.y)
-  if (dist <= SNAP_THRESHOLD) {
-    win.setBounds({ x: target.x, y: target.y, width: bounds.width, height: bounds.height })
-    applyOpacity(win.getOpacity(), 'snap')
-  }
+  moduleShortcuts.set(id, registered)
 }
 
-function snapToCorner(corner) {
-  if (!win || win.isDestroyed() || !corner) return
-  const bounds = win.getBounds()
-  const display = screen.getDisplayMatching(bounds)
-  const { x, y, width, height } = display.workArea
-  const targets = {
-    'top-left': { x, y },
-    'top-right': { x: x + width - bounds.width, y },
-    'bottom-left': { x, y: y + height - bounds.height },
-    'bottom-right': { x: x + width - bounds.width, y: y + height - bounds.height }
+function unregisterModuleShortcuts(id) {
+  for (const accel of moduleShortcuts.get(id) ?? []) globalShortcut.unregister(accel)
+  moduleShortcuts.delete(id)
+}
+
+// ---------------------------------------------------------------------------
+// Widget context menu (right-click on a widget)
+
+function showWidgetMenu(id) {
+  const m = getManifest(id)
+  const w = config.modules[id].widget
+  const win = widgets.get(id)
+  if (!m || !win) return
+  const cornerLabels = {
+    null: 'Ninguna',
+    'top-left': 'Arriba a la izquierda',
+    'top-right': 'Arriba a la derecha',
+    'bottom-left': 'Abajo a la izquierda',
+    'bottom-right': 'Abajo a la derecha'
   }
-  const t = targets[corner]
-  if (t) {
-    win.setBounds({ x: t.x, y: t.y, width: bounds.width, height: bounds.height })
-    applyOpacity(win.getOpacity(), 'snap')
+  Menu.buildFromTemplate([
+    { label: `${m.icon}  ${m.name}`, enabled: false },
+    { type: 'separator' },
+    {
+      label: 'Tamaño',
+      submenu: m.sizes.map((s) => ({
+        label: SIZE_LABELS[s],
+        type: 'radio',
+        checked: w.size === s,
+        click: () => setWidget(id, { size: s })
+      }))
+    },
+    {
+      label: 'Capa',
+      submenu: Object.entries(LAYER_LABELS).map(([k, label]) => ({
+        label,
+        type: 'radio',
+        checked: w.layer === k,
+        click: () => setWidget(id, { layer: k })
+      }))
+    },
+    {
+      label: 'Anclar a esquina',
+      submenu: [null, ...CORNERS].map((c) => ({
+        label: cornerLabels[c],
+        type: 'radio',
+        checked: w.snapCorner === c,
+        click: () => setWidget(id, { snapCorner: c })
+      }))
+    },
+    { type: 'separator' },
+    { label: `Ajustes de ${m.name}…`, click: () => showPanel(`module:${id}`) },
+    { label: 'Panel de control…', click: () => showPanel('modules') },
+    { type: 'separator' },
+    { label: 'Ocultar widget', click: () => setWidget(id, { visible: false }) },
+    { label: 'Desactivar módulo', click: () => setModuleEnabled(id, false) }
+  ]).popup({ window: win })
+}
+
+const showPanel = (page) => openPanel(page, config?.general.theme ?? GENERAL_DEFAULTS.theme)
+
+// ---------------------------------------------------------------------------
+// Tray
+
+const trayIconPath = () =>
+  [join(process.resourcesPath, 'resources', 'tray.png'), join(app.getAppPath(), 'resources', 'tray.png')].find((p) =>
+    existsSync(p)
+  ) ?? null
+
+let trayTimer = null
+function refreshTray() {
+  // Coalesce the many refreshes a running timer asks for.
+  if (trayTimer) return
+  trayTimer = setTimeout(() => {
+    trayTimer = null
+    buildTrayMenu()
+  }, 30)
+}
+
+function buildTrayMenu() {
+  if (!tray || !config) return
+  const items = []
+  const status = []
+  for (const m of MANIFESTS) {
+    const svc = services.get(m.id)
+    if (!config.modules[m.id].enabled || !svc?.statusLabel) continue
+    const label = svc.statusLabel()
+    status.push(label)
+    items.push({ label: `${m.icon}  ${label}`, enabled: false }, ...(svc.trayItems?.() ?? []), { type: 'separator' })
   }
+  const enabled = MANIFESTS.filter((m) => config.modules[m.id].enabled)
+  const anyVisible = enabled.some((m) => config.modules[m.id].widget.visible)
+  items.push(
+    { label: 'Panel de control…', click: () => showPanel('modules') },
+    {
+      label: 'Módulos',
+      submenu: MANIFESTS.map((m) => ({
+        label: `${m.icon}  ${m.name}`,
+        type: 'checkbox',
+        checked: config.modules[m.id].enabled,
+        click: (item) => setModuleEnabled(m.id, item.checked)
+      }))
+    },
+    { label: anyVisible ? 'Ocultar widgets' : 'Mostrar widgets', enabled: enabled.length > 0, click: toggleAllWidgets },
+    {
+      label: 'Click-through',
+      type: 'checkbox',
+      checked: config.general.clickThrough,
+      click: (item) => updateGeneral({ clickThrough: item.checked })
+    },
+    { type: 'separator' },
+    { label: 'Salir', click: () => quitApp() }
+  )
+  tray.setContextMenu(Menu.buildFromTemplate(items))
+  tray.setToolTip(['Pomodoro Widget', ...status].join('\n'))
 }
 
 function createTray() {
-  tray = new Tray(getTrayIcon())
-  tray.setToolTip('Pomodoro Widget')
-  rebuildTrayMenu()
-
+  const p = trayIconPath()
+  tray = new Tray(p ? nativeImage.createFromPath(p) : nativeImage.createEmpty())
   tray.on('click', () => {
-    if (process.platform === 'darwin') return
-    toggleWindow()
+    if (process.platform !== 'darwin') toggleAllWidgets()
   })
-  tray.on('double-click', () => toggleWindow())
+  buildTrayMenu()
 }
 
-function statusLabel() {
-  const phaseLabels = { work: 'Focus', short: 'Short Break', long: 'Long Break' }
-  return `${phaseLabels[timerStatus.phase] ?? 'Focus'} · ${timerStatus.label}`
+// ---------------------------------------------------------------------------
+// IPC
+
+function registerIpc() {
+  ipcMain.handle('config:get', () => config)
+  ipcMain.handle('config:set-general', (_e, patch) => {
+    updateGeneral(cleanGeneral(patch))
+    return config
+  })
+  ipcMain.handle('config:set-module', (_e, id, patch) => {
+    if (!getManifest(id)) return config
+    updateModule(id, cleanModulePatch(id, patch))
+    return config
+  })
+
+  ipcMain.handle('widget:context-menu', (e) => {
+    const id = widgets.idFor(e.sender)
+    if (id) showWidgetMenu(id)
+  })
+  ipcMain.handle('widget:hide', (e) => {
+    const id = widgets.idFor(e.sender)
+    if (id) setWidget(id, { visible: false })
+  })
+
+  ipcMain.handle('toast:get', (e) => toasts.payloadFor(e.sender))
+  ipcMain.handle('toast:action', (e, actionId) => toasts.action(e.sender, String(actionId)))
+  ipcMain.handle('toast:dismiss', (e) => toasts.dismiss(e.sender))
+  ipcMain.handle('toast:hover', (e, on) => toasts.hover(e.sender, !!on))
+
+  ipcMain.handle('panel:open', (_e, page) => {
+    showPanel(typeof page === 'string' ? page : 'modules')
+  })
+
+  ipcMain.handle('app:quit', () => quitApp())
+  ipcMain.handle('app:info', () => ({ version: app.getVersion(), platform: process.platform }))
 }
 
-function rebuildTrayMenu() {
-  if (!tray) return
-  const settings = getSettings()
-  const menu = Menu.buildFromTemplate([
-    { label: statusLabel(), enabled: false },
-    { type: 'separator' },
-    {
-      label: 'Start / Pause',
-      click: () => {
-        if (win) win.webContents.send('timer:toggle')
-      }
-    },
-    {
-      label: 'Reset',
-      click: () => {
-        if (win) win.webContents.send('timer:reset')
-      }
-    },
-    { type: 'separator' },
-    {
-      label: 'Show / Hide Widget',
-      click: () => toggleWindow()
-    },
-    {
-      label: 'Click-Through',
-      type: 'checkbox',
-      checked: settings.clickThrough,
-      click: (item) => {
-        setSettings({ clickThrough: item.checked })
-        applySettingsSideEffects({ clickThrough: item.checked })
-        rebuildTrayMenu()
-      }
-    },
-    { type: 'separator' },
-    {
-      label: 'Quit',
-      click: () => quitApp()
-    }
-  ])
-  tray.setContextMenu(menu)
-}
-
-function toggleWindow() {
-  if (!win || win.isDestroyed()) return
-  if (win.isVisible()) {
-    win.hide()
-  } else {
-    win.show()
-    win.focus()
+function registerGlobalShortcuts() {
+  const shortcuts = {
+    'Alt+Shift+O': () => toggleAllWidgets(),
+    'Alt+Shift+T': () => updateGeneral({ clickThrough: !config.general.clickThrough }),
+    'Alt+Shift+M': () => showPanel()
+  }
+  for (const [accel, fn] of Object.entries(shortcuts)) {
+    if (!globalShortcut.register(accel, fn)) log(`[main] shortcut ${accel} could not be registered`)
   }
 }
 
@@ -264,559 +364,87 @@ function quitApp() {
   app.quit()
 }
 
-let suppressRevealUntil = 0
+// ---------------------------------------------------------------------------
+// Widgets
 
-function setWindowSize(width, height) {
-  if (!win || win.isDestroyed()) return
-  const b = win.getBounds()
-  const h = Math.round(Math.min(700, Math.max(110, height)))
-  if (Math.abs(b.height - h) < 3 && Math.abs(b.width - width) < 3) return
-  const display = screen.getDisplayMatching(b)
-  const work = display.workArea
-  let y = b.y + b.height - h
-  if (y < work.y) y = work.y
-  if (y + h > work.y + work.height && h <= work.height) y = work.y + work.height - h
-  win.setBounds({ x: b.x, y, width, height: h })
-  applyOpacity(win.getOpacity(), 'resize')
-  suppressRevealUntil = Date.now() + 2000
-}
+const widgets = createWidgetManager({
+  getConfig: () => config,
+  // Position changes are saved silently (no need to re-render every window).
+  savePosition: (id, position) => {
+    setModule(id, { widget: { position } })
+    config = getConfig()
+  },
+  onContextMenu: (id) => showWidgetMenu(id),
+  onCloseRequest: (id) => setWidget(id, { visible: false }),
+  isQuitting: () => isQuitting,
+  log
+})
 
-function applySettingsSideEffects(patch) {
-  if (!win || win.isDestroyed()) return
+const toasts = createToastManager({ log, durationMs: Number(process.env.POMODORO_TOAST_MS) || 10000 })
 
-  if (typeof patch.opacity === 'number') applyOpacity(patch.opacity, 'settings')
-  if (typeof patch.alwaysOnTop === 'boolean') {
-    win.setAlwaysOnTop(patch.alwaysOnTop, 'screen-saver')
-  }
-  if (typeof patch.clickThrough === 'boolean') {
-    win.setIgnoreMouseEvents(patch.clickThrough, { forward: true })
-  }
-  if (patch.widgetSize !== undefined) {
-    const preset = WIDGET_SIZES[patch.widgetSize]
-    if (preset) setWindowSize(preset[0], preset[1])
-  }
-  if (patch.snapCorner !== undefined) {
-    snapToCorner(patch.snapCorner)
-  }
-  if (typeof patch.launchAtLogin === 'boolean') {
-    app.setLoginItemSettings({ openAtLogin: patch.launchAtLogin })
-  }
-  rebuildTrayMenu()
-}
-
-function registerIpc() {
-  ipcMain.handle('settings:get', () => {
-    log('[main] settings:get called')
-    return getSettings()
-  })
-  ipcMain.handle('settings:set', (_e, patch) => {
-    const next = setSettings(patch)
-    applySettingsSideEffects(patch)
-    return next
-  })
-
-  ipcMain.handle('tasks:list', () => getTasks())
-  ipcMain.handle('tasks:add', (_e, task) => {
-    const tasks = [...getTasks(), task]
-    setTasks(tasks)
-    return tasks
-  })
-  ipcMain.handle('tasks:update', (_e, id, patch) => {
-    const tasks = getTasks().map((t) => (t.id === id ? { ...t, ...patch } : t))
-    setTasks(tasks)
-    return tasks
-  })
-  ipcMain.handle('tasks:delete', (_e, id) => {
-    const tasks = getTasks().filter((t) => t.id !== id)
-    setTasks(tasks)
-    return tasks
-  })
-
-  ipcMain.handle('history:list', () => getHistory())
-  ipcMain.handle('history:add', (_e, entry) => {
-    const history = [...getHistory(), entry]
-    setHistory(history)
-    return history
-  })
-  ipcMain.handle('history:clear', () => {
-    setHistory([])
-    return []
-  })
-
-  ipcMain.handle('notify:show', (_e, { title, body }) => {
-    if (!Notification.isSupported()) return
-    new Notification({ title, body, silent: true }).show()
-  })
-
-  ipcMain.on('timer:sync', (_e, status) => {
-    log(`[main] timer:sync ${status.phase} ${status.label} running=${status.running}`)
-    timerStatus = { ...timerStatus, ...status }
-    tray?.setToolTip(`Pomodoro Widget — ${statusLabel()}`)
-    rebuildTrayMenu()
-  })
-
-  ipcMain.on('win:hide', () => {
-    if (win && !win.isDestroyed()) win.hide()
-  })
-  ipcMain.on('win:minimize', () => {
-    if (win && !win.isDestroyed()) win.minimize()
-  })
-  ipcMain.on('win:blur', () => {
-    if (win && !win.isDestroyed()) win.blur()
-  })
-  ipcMain.on('win:collapse', (_e, height) => {
-    const b = win.getBounds()
-    setWindowSize(b.width, height)
-  })
-  ipcMain.on('win:restore-size', () => {
-    const preset = WIDGET_SIZES[getSettings().widgetSize] ?? WIDGET_SIZES.medium
-    setWindowSize(preset[0], preset[1])
-  })
-  ipcMain.on('app:quit', () => quitApp())
-  ipcMain.handle('app:getInfo', () => ({
-    version: app.getVersion(),
-    platform: process.platform
-  }))
-}
-
-function registerShortcuts() {
-  globalShortcut.register('Alt+Shift+P', () => {
-    if (win) win.webContents.send('timer:toggle')
-  })
-  globalShortcut.register('Alt+Shift+O', () => toggleWindow())
-  globalShortcut.register('Alt+Shift+T', () => {
-    const next = !getSettings().clickThrough
-    setSettings({ clickThrough: next })
-    applySettingsSideEffects({ clickThrough: next })
-  })
-}
+// ---------------------------------------------------------------------------
+// App lifecycle
 
 const hasLock = app.requestSingleInstanceLock()
 if (!hasLock) {
   app.quit()
 } else {
-  app.on('second-instance', () => toggleWindow())
+  // Launching the app again opens the Control Panel.
+  app.on('second-instance', () => showPanel())
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
+    trimLog()
     app.setAppUserModelId('com.aroco.pomodoro-widget')
     if (process.platform === 'darwin') app.dock?.hide()
 
-    setSettings({ opacity: 1 })
-    setSettings({ durations: { ...getSettings().durations, work: 25 } })
-
-    if (process.env.POMODORO_TEST === '1') {
-      setSettings({ widgetSize: 'medium', opacity: 0.35, clickThrough: false })
-      applySettingsSideEffects({ clickThrough: false })
+    config = getConfig()
+    for (const m of MANIFESTS) {
+      const factory = SERVICES[m.id]
+      if (factory) services.set(m.id, factory(createServiceContext(m.id)))
     }
 
     registerIpc()
-    createWindow()
     createTray()
-    registerShortcuts()
+    registerGlobalShortcuts()
+    commit(null)
 
-    const settings = getSettings()
-    if (settings.launchAtLogin) {
-      app.setLoginItemSettings({ openAtLogin: true })
+    if (config.general.launchAtLogin) app.setLoginItemSettings({ openAtLogin: true })
+
+    if (IS_TEST) {
+      try {
+        const { runSelfTest } = await import('./selftest.js')
+        await runSelfTest({
+          getConfig: () => config,
+          updateModule,
+          updateGeneral,
+          toggleAllWidgets,
+          widgets,
+          toasts,
+          services,
+          showPanel,
+          getPanel,
+          log
+        })
+      } catch (err) {
+        log(`[test] CRASH ${err && err.stack ? err.stack : String(err)}`)
+      } finally {
+        quitApp()
+      }
     }
   })
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    if (BrowserWindow.getAllWindows().length === 0 || !getPanel()) showPanel()
   })
 
-  app.on('window-all-closed', () => {
-    // keep the app alive in the tray; the window is hidden, not destroyed
+  // Keep running in the tray when the Control Panel is closed.
+  app.on('window-all-closed', () => {})
+
+  app.on('before-quit', () => {
+    isQuitting = true
   })
 
-  if (process.env.POMODORO_TEST === '1') {
-    const CLICK_REQ = 'C:/Users/aroco/AppData/Local/Temp/opencode/pomodoro-click.txt'
-    app.whenReady().then(async () => {
-      try {
-        await runSelfTest(CLICK_REQ)
-      } catch (err) {
-        log(`[test] CRASH ${err && err.stack ? err.stack : String(err)}`)
-      } finally {
-        isQuitting = true
-        app.quit()
-      }
-    })
-  }
+  app.on('will-quit', () => {
+    globalShortcut.unregisterAll()
+  })
 }
-
-async function runSelfTest(CLICK_REQ) {
-      const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-      try {
-        rmSync(CLICK_REQ, { force: true })
-      } catch {
-        /* ignore */
-      }
-      await sleep(2500)
-      const checks = []
-      const js = (code) => win.webContents.executeJavaScript(code)
-      const read = async (expr) => js(`window.__timerDebug ? window.__timerDebug.${expr} : null`)
-
-      const oStart = win.getOpacity()
-      log(`[test] startup opacity -> ${oStart}`)
-      checks.push(Math.abs(oStart - 1) < 0.05)
-
-      const hidden0 = await js(`document.querySelector('[data-testid="topbar"]').classList.contains('focus-hidden')`)
-      log(`[test] bar hidden by default: ${hidden0}`)
-      checks.push(hidden0 === true)
-
-      const expectWidth = async (preset, w) => {
-        setSettings({ widgetSize: preset })
-        applySettingsSideEffects({ widgetSize: preset })
-        await sleep(700)
-        const b = win.getBounds()
-        log(`[test] size ${preset} -> ${b.width}x${b.height}`)
-        checks.push(Math.abs(b.width - w) < 3)
-      }
-      await expectWidth('large', 380)
-      await expectWidth('medium', 320)
-      await expectWidth('small', 280)
-      await js(`document.querySelector('[data-testid="reveal-handle"]').click(); true`)
-      await sleep(700)
-      const btnOk = await js(`(() => {
-        const b = document.querySelector('[data-testid="quit-btn"]')
-        if (!b) return false
-        const r = b.getBoundingClientRect()
-        return r.width > 0 && r.left >= 0 && r.right <= window.innerWidth + 1 && r.top >= 0
-      })()`)
-      log(`[test] quit-btn visible at small: ${btnOk}`)
-      checks.push(btnOk === true)
-      await js(`document.querySelector('[data-testid="collapse-btn"]').click(); true`)
-      await sleep(1000)
-      await expectWidth('medium', 320)
-
-      setSettings({ opacity: 0.45 })
-      applySettingsSideEffects({ opacity: 0.45 })
-      await sleep(500)
-      const o1 = win.getOpacity()
-      log(`[test] opacity set 0.45 -> ${o1}`)
-      checks.push(Math.abs(o1 - 0.45) < 0.05)
-
-      await expectWidth('large', 380)
-      const o2 = win.getOpacity()
-      log(`[test] opacity after resize -> ${o2}`)
-      checks.push(Math.abs(o2 - 0.45) < 0.05)
-      await expectWidth('medium', 320)
-
-      await js('window.__timerDebug.start(); true')
-      await sleep(3200)
-      const s1 = await read('secondsLeft')
-      await js('window.__timerDebug.pause(); true')
-      await sleep(1500)
-      const s2 = await read('secondsLeft')
-      await sleep(1500)
-      const s2b = await read('secondsLeft')
-      const r1 = await read('running')
-      log(`[test] pause: s1=${s1} s2=${s2} s2b=${s2b} running=${r1}`)
-      checks.push(typeof s1 === 'number' && s1 > 0 && s1 - s2 <= 1 && s2 - s2b === 0 && r1 === false)
-
-      await js('window.__timerDebug.start(); true')
-      await sleep(2200)
-      const s3 = await read('secondsLeft')
-      log(`[test] resume: s2=${s2} s3=${s3}`)
-      checks.push(typeof s3 === 'number' && s2 - s3 >= 2)
-
-      await js('window.__timerDebug.reset(); true')
-      await sleep(400)
-      const noCard = await js(`!!document.querySelector('[data-testid="focus-card"]')`)
-      log(`[test] card idle (always mounted): ${noCard}`)
-      checks.push(noCard === true)
-
-      await js('window.__timerDebug.start(); true')
-      await sleep(700)
-      const hasCard = await js(`!!document.querySelector('[data-testid="focus-card"]')`)
-      const cardLabel = await js(
-        `document.querySelector('[data-testid="focus-card"]')?.textContent ?? ''`
-      )
-      log(`[test] card running: ${hasCard} label="${cardLabel}"`)
-      checks.push(hasCard === true && cardLabel.includes('FOCUS TIME'))
-
-      await js('window.__timerDebug.pause(); true')
-      await sleep(400)
-      const pausedCard = await js(`!!document.querySelector('[data-testid="focus-card"]')`)
-      checks.push(pausedCard === true)
-
-      await js(`document.querySelector('[data-testid="tab-timer"]').click(); true`)
-      await sleep(300)
-      const t1 = await js('window.__debugTab')
-      await js('window.api.win.hide(); true')
-      await sleep(500)
-      win.show()
-      await sleep(600)
-      const t2 = await js('window.__debugTab')
-      log(`[test] nav: before=${t1} after-show=${t2}`)
-      checks.push(t1 === 'timer' && t2 === 'home')
-
-      await js('window.__timerDebug.reset(); true')
-      await sleep(400)
-      const stillRevealed = await js('window.__debugRevealed')
-      if (stillRevealed) {
-        await js(`document.querySelector('[data-testid="collapse-btn"]').click(); true`)
-        await sleep(1000)
-      }
-
-      win.setBounds({ x: 200, y: 200, width: win.getBounds().width, height: win.getBounds().height })
-      await sleep(400)
-      const writeClickReq = (x, y) => {
-        try {
-          writeFileSync(CLICK_REQ, `${x},${y}`)
-        } catch {
-          /* ignore */
-        }
-      }
-      const waitForReveal = async (maxSec = 25) => {
-        for (let i = 0; i < maxSec; i++) {
-          await sleep(1000)
-          if (i === 0) continue
-          if (await js('window.__debugRevealed')) return true
-        }
-        return false
-      }
-      const waitForHidden = async (maxSec = 25) => {
-        for (let i = 0; i < maxSec; i++) {
-          await sleep(1000)
-          if (i === 0) continue
-          if (!(await js('window.__debugRevealed'))) return true
-        }
-        return false
-      }
-
-      const clickAt = (bx, by, vx, vy) => writeClickReq(bx + vx, by + vy)
-      const ensureHidden = async () => {
-        if (await js('window.__debugRevealed')) {
-          await js(`document.querySelector('[data-testid="clock-area"]').click(); true`)
-          await sleep(1000)
-        }
-      }
-      const ensureRevealed = async () => {
-        if (!(await js('window.__debugRevealed'))) {
-          await js(`document.querySelector('[data-testid="reveal-handle"]').click(); true`)
-          await sleep(800)
-        }
-      }
-
-      const tryReveal = async () => {
-        for (let attempt = 0; attempt < 3; attempt++) {
-          win.setBounds({ x: 200, y: 200, width: 320, height: 141 })
-          await sleep(400)
-          const b = win.getBounds()
-          const hRect = await js(`(() => {
-            const r = document.querySelector('[data-testid="reveal-handle"]').getBoundingClientRect()
-            return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) + 2 }
-          })()`)
-          clickAt(b.x, b.y, hRect.x, hRect.y)
-          log(`[test] click-request #1 attempt ${attempt + 1} at ${b.x + hRect.x},${b.y + hRect.y}`)
-          const ok = await waitForReveal()
-          if (ok) return true
-        }
-        return false
-      }
-
-      win.blur()
-      const rck1 = await tryReveal()
-      const trusted1 = await js('window.__debugTrustedClick || 0')
-      log(`[test] real-click handle reveal: ${rck1} trusted=${trusted1}`)
-      checks.push(rck1 === true)
-      if (!rck1) {
-        await js(`document.querySelector('[data-testid="reveal-handle"]').click(); true`)
-        await sleep(1000)
-      }
-
-      const tryHide = async () => {
-        for (let attempt = 0; attempt < 3; attempt++) {
-          if (!(await js('window.__debugRevealed'))) {
-            await js(`document.querySelector('[data-testid="reveal-handle"]').click(); true`)
-            await sleep(800)
-          }
-          win.setBounds({ x: 200, y: 80, width: 320, height: 460 })
-          await sleep(400)
-          const b = win.getBounds()
-          const cRect = await js(`(() => {
-            const r = document.querySelector('[data-testid="home-content"]').getBoundingClientRect()
-            return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }
-          })()`)
-          const before = await js('window.__debugTrustedClick || 0')
-          clickAt(b.x, b.y, cRect.x, cRect.y)
-          log(`[test] click-request #2 attempt ${attempt + 1} at ${b.x + cRect.x},${b.y + cRect.y}`)
-          const ok = await waitForHidden()
-          const after = await js('window.__debugTrustedClick || 0')
-          if (ok && after > before) return true
-        }
-        return false
-      }
-
-      const rck2 = await tryHide()
-      const trusted2 = await js('window.__debugTrustedClick || 0')
-      const delivered2 = trusted2 > trusted1
-      log(`[test] real-click clock hide: ${rck2} trusted=${trusted2} delivered=${delivered2}`)
-      checks.push(!delivered2 || rck2 === true)
-      if (rck2) {
-        await js(`document.querySelector('#root > div').click(); true`)
-        await sleep(1000)
-      }
-
-      await ensureHidden()
-      await sleep(500)
-      const idleContent = await js(`document.querySelector('[data-testid="home-content"]').offsetHeight`)
-      const fitIdle = win.getBounds().height
-      log(`[test] tight idle: content=${idleContent} height=${fitIdle}`)
-      checks.push(fitIdle >= 110 && Math.abs(fitIdle - (idleContent + 40)) <= 8)
-
-      await ensureHidden()
-      await js(`document.querySelector('[data-testid="reveal-handle"]').click(); true`)
-      await sleep(700)
-      const rvH = win.getBounds().height
-      const dbgRev = await js('window.__debugRevealed')
-      const barVis = await js(`!document.querySelector('[data-testid="topbar"]').classList.contains('focus-hidden')`)
-      const padOk = await js(`(() => {
-        const bar = document.querySelector('[data-testid="topbar"]')
-        const c = document.querySelector('[data-testid="home-content"]')
-        if (!bar || !c) return false
-        const rb = bar.getBoundingClientRect()
-        const rc = c.getBoundingClientRect()
-        return rb.bottom <= rc.top + 2
-      })()`)
-      log(`[test] reveal: h=${rvH} dbg=${dbgRev} bar=${barVis} pad=${padOk}`)
-      checks.push(Math.abs(rvH - 460) < 3 && barVis === true && padOk === true)
-
-      await js(`document.querySelector('[data-testid="clock-area"]').click(); true`)
-      await sleep(1000)
-      const fitIdle2 = win.getBounds().height
-      log(`[test] click-hide tight: ${fitIdle2}`)
-      checks.push(fitIdle2 >= 110 && Math.abs(fitIdle2 - (idleContent + 40)) <= 8)
-
-      await ensureHidden()
-      await js(`document.querySelector('[data-testid="reveal-handle"]').click(); true`)
-      await sleep(700)
-      await js(`window.dispatchEvent(new Event('blur')); true`)
-      await sleep(1000)
-      const fitBlur = win.getBounds().height
-      log(`[test] blur hide: ${fitBlur}`)
-      checks.push(fitBlur >= 110 && Math.abs(fitBlur - (idleContent + 40)) <= 8)
-
-      await js('window.__timerDebug.start(); true')
-      await sleep(600)
-      const runContent = await js(`document.querySelector('[data-testid="home-content"]').offsetHeight`)
-      await ensureHidden()
-      await js(`document.querySelector('[data-testid="reveal-handle"]').click(); true`)
-      await sleep(700)
-      await js(`document.querySelector('[data-testid="clock-area"]').click(); true`)
-      await sleep(1000)
-      const fitRun = win.getBounds().height
-      log(`[test] running tight: content=${runContent} height=${fitRun}`)
-      checks.push(Math.abs(fitRun - (runContent + 40)) <= 8)
-
-      await js(`document.querySelector('[data-testid="tab-timer"]').click(); true`)
-      await sleep(700)
-      const rv2 = win.getBounds().height
-      log(`[test] tab-switch restore: ${rv2}`)
-      checks.push(Math.abs(rv2 - 460) < 3)
-
-      await js(`window.__debugSettingsSet({ opacity: 0.45 }); true`)
-      await sleep(500)
-      const op = async (label) => {
-        const o = win.getOpacity()
-        log(`[test] opacity ${label}: ${o}`)
-        checks.push(Math.abs(o - 0.45) < 0.05)
-      }
-      await op('set')
-      setSettings({ widgetSize: 'small' })
-      applySettingsSideEffects({ widgetSize: 'small' })
-      await sleep(600)
-      await op('resize-small')
-      await js(`document.querySelector('[data-testid="tab-home"]').click(); true`)
-      await sleep(300)
-      await js(`document.querySelector('[data-testid="clock-area"]').click(); true`)
-      await sleep(1000)
-      await op('collapse')
-      setSettings({ snapCorner: 'top-right' })
-      applySettingsSideEffects({ snapCorner: 'top-right' })
-      await sleep(500)
-      await op('snap')
-      setSettings({ snapCorner: null })
-      applySettingsSideEffects({ snapCorner: null })
-      await js(`window.__debugSettingsSet({ widgetSize: 'medium' }); true`)
-      await sleep(600)
-      await op('final')
-
-      await js('window.__timerDebug.reset(); true')
-      await sleep(300)
-      await js(`window.__debugSettingsSet({ notificationsEnabled: false, soundEnabled: false, longBreakInterval: 2, autoStartNext: true, durations: { work: 1, short: 1, long: 1 } }); true`)
-      await sleep(600)
-      const step = async (wait) => {
-        await js(`window.__timerDebug.debugSetSecondsLeft(1); true`)
-        await sleep(wait)
-      }
-      const ph = async () => js(`window.__timerDebug.phase`)
-      const cyc = async () => js(`window.__timerDebug.cycleCount`)
-      const sec = async () => js(`window.__timerDebug.secondsLeft`)
-      const run = async () => js(`window.__timerDebug.running`)
-      const pips = async () => js(`(() => {
-        const el = document.querySelector('[data-testid="cycle-indicator"]')
-        if (!el) return 'missing'
-        const filled = el.querySelectorAll('[data-filled="true"]').length
-        const total = el.querySelectorAll('[data-cycle-pip]').length
-        return filled + '/' + total
-      })()`)
-
-      await js('window.__timerDebug.start(); true')
-      await step(1600)
-      const p1 = await ph()
-      const c1 = await cyc()
-      const cs1 = await sec()
-      const cr1 = await run()
-      const l1 = await js(`document.querySelector('[data-testid="focus-card"]')?.textContent ?? ''`)
-      const pip1 = await pips()
-      const alert1 = await js(`document.querySelector('[data-testid="phase-alert"]')?.textContent ?? ''`)
-      log(`[test] w1 -> ${p1}/${c1} s=${cs1} run=${cr1} label="${l1}" pips=${pip1} alert="${alert1}"`)
-      checks.push(
-        p1 === 'short' &&
-          c1 === 1 &&
-          cs1 === 60 &&
-          cr1 === true &&
-          l1.includes('BREAK TIME') &&
-          pip1 === '1/2' &&
-          alert1.includes('break')
-      )
-
-      await sleep(1200)
-      const cs1b = await sec()
-      log(`[test] break ticking after handoff: ${cs1b}`)
-      checks.push(cs1b === 59 || cs1b === 58)
-
-      await step(1600)
-      const p2 = await ph()
-      const c2 = await cyc()
-      const cr2 = await run()
-      const alert2 = await js(`document.querySelector('[data-testid="phase-alert"]')?.textContent ?? ''`)
-      log(`[test] s1 -> ${p2}/${c2} run=${cr2} alert="${alert2}"`)
-      checks.push(p2 === 'work' && c2 === 1 && cr2 === false && alert2.includes('next cycle'))
-
-      await js('window.__timerDebug.start(); true')
-      await step(1600)
-      const p3 = await ph()
-      const c3 = await cyc()
-      const cr3 = await run()
-      const pip3 = await pips()
-      log(`[test] w2 -> ${p3}/${c3} run=${cr3} pips=${pip3}`)
-      checks.push(p3 === 'long' && c3 === 2 && cr3 === true && pip3 === '2/2')
-
-      await step(1600)
-      const p4 = await ph()
-      const c4 = await cyc()
-      const cr4 = await run()
-      log(`[test] l1 -> ${p4}/${c4} run=${cr4}`)
-      checks.push(p4 === 'work' && c4 === 0 && cr4 === false)
-
-      await js('window.__timerDebug.reset(); true')
-      await sleep(300)
-
-      const allPass = checks.every(Boolean)
-      log(`[test] ${allPass ? 'PASS' : 'FAIL'} n=${checks.length} ${checks.join(',')}`)
-      isQuitting = true
-      app.quit()
-    }
-
