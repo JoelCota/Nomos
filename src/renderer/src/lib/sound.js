@@ -23,3 +23,24 @@ export function playChime() {
     /* audio unavailable */
   }
 }
+
+// A single soft tone for notification cards.
+export function playSoftChime() {
+  try {
+    ctx = ctx ?? new AudioContext()
+    const t = ctx.currentTime
+    const osc = ctx.createOscillator()
+    const gain = ctx.createGain()
+    osc.type = 'sine'
+    osc.frequency.value = 987.77
+    gain.gain.setValueAtTime(0.0001, t)
+    gain.gain.exponentialRampToValueAtTime(0.18, t + 0.02)
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.5)
+    osc.connect(gain)
+    gain.connect(ctx.destination)
+    osc.start(t)
+    osc.stop(t + 0.55)
+  } catch {
+    /* audio unavailable */
+  }
+}

@@ -1,19 +1,11 @@
-export const dayKey = (d = new Date()) => {
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
-}
+import { LOCALE, dayKey } from '../../../shared/time'
 
 export const lastNDays = (n) => {
   const out = []
   for (let i = n - 1; i >= 0; i--) {
     const d = new Date()
     d.setDate(d.getDate() - i)
-    out.push({
-      key: dayKey(d),
-      label: d.toLocaleDateString(undefined, { weekday: 'narrow' })
-    })
+    out.push({ key: dayKey(d), label: d.toLocaleDateString(LOCALE, { weekday: 'short' }) })
   }
   return out
 }
@@ -31,8 +23,7 @@ export const countByDay = (history, days) => {
 export const currentStreak = (history) => {
   const days = new Set()
   for (const e of history) {
-    if (e.mode !== 'work') continue
-    days.add(dayKey(new Date(e.completedAt)))
+    if (e.mode === 'work') days.add(dayKey(new Date(e.completedAt)))
   }
   let streak = 0
   const d = new Date()
