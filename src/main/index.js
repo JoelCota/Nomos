@@ -8,6 +8,7 @@ import { initNative, setGlassDarkMode, supports } from './native.js'
 import { getConfig, setGeneral, setModule, getData, setData } from './store.js'
 import { createWidgetManager } from './widgets.js'
 import { createToastManager } from './toasts.js'
+import { createWindowHost } from './host.js'
 import { openPanel, getPanel } from './panel.js'
 import { log, trimLog } from './log.js'
 import { IS_TEST, TOAST_MS } from './views.js'
@@ -191,6 +192,8 @@ function createServiceContext(id) {
     },
     handle: (name, fn) => ipcMain.handle(`${id}:${name}`, (_e, ...args) => fn(...args)),
     broadcast: (event, payload) => sendToAll(`${id}:${event}`, payload),
+    // Sounds play in the shared host window, so they work with every widget hidden.
+    playSound: (kind) => windowHost.playSound(kind),
     notify: (title, body) => {
       if (Notification.isSupported()) new Notification({ title, body, silent: true }).show()
     },
@@ -396,7 +399,22 @@ function quitApp() {
 // ---------------------------------------------------------------------------
 // Widgets
 
+// Widgets and cards share one renderer process through a hidden host window.
+// NOMOS_SEPARATE_WINDOWS=1 goes back to one process per window (for debugging).
+const windowHost = createWindowHost({
+  log,
+  separate: process.env.NOMOS_SEPARATE_WINDOWS === '1',
+  // If the shared process dies, every widget went with it: open them again.
+  onCrash: () => {
+    widgets.destroyAll()
+    toasts.closeAll()
+    setTimeout(() => config && commit(config), 500)
+  }
+})
+const openWindow = (options, query) => windowHost.open(options, query)
+
 const widgets = createWidgetManager({
+  openWindow,
   getConfig: () => config,
   // Position changes are saved silently (no need to re-render every window).
   savePosition: (id, position) => {
@@ -410,7 +428,7 @@ const widgets = createWidgetManager({
   log
 })
 
-const toasts = createToastManager({ log, durationMs: TOAST_MS })
+const toasts = createToastManager({ log, openWindow, durationMs: TOAST_MS })
 
 // ---------------------------------------------------------------------------
 // App lifecycle
@@ -454,6 +472,7 @@ if (!hasLock) {
           toggleAllWidgets,
           widgets,
           toasts,
+          windowHost,
           services,
           showPanel,
           getPanel,

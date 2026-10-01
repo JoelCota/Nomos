@@ -159,8 +159,9 @@ export default function createPomodoroService(ctx) {
 
   function announce(type, title, body, message) {
     if (settings().notificationsEnabled) ctx.notify(title, body)
-    // Widgets show the message and play the chime (if sound is enabled).
-    ctx.broadcast('event', { type, message, sound: !!settings().soundEnabled })
+    if (settings().soundEnabled) ctx.playSound('chime')
+    // Visible widgets show the message.
+    ctx.broadcast('event', { type, message })
   }
 
   const start = () => {

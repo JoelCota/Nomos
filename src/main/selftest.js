@@ -1,11 +1,12 @@
 // Automated self-test. Run with NOMOS_TEST=1 (see main/index.js): it uses an
 // isolated userData folder seeded with v1 data, so real settings are untouched.
 // Results go to <temp>/nomos-selftest/debug.log ("[test] PASS|FAIL").
+import { app } from 'electron'
 import { getAdoptedFrom, getData, hasStoreKey } from './store.js'
 import { TOAST_MS } from './views.js'
 import { WIDGET_PAD, widgetWindowSize } from '../shared/config.js'
 
-export async function runSelfTest({ getConfig, updateModule, updateGeneral, toggleAllWidgets, widgets, toasts, services, showPanel, getPanel, log }) {
+export async function runSelfTest({ getConfig, updateModule, updateGeneral, toggleAllWidgets, widgets, toasts, windowHost, services, showPanel, getPanel, log }) {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
   const results = []
   const check = (name, cond, detail = '') => {
@@ -25,7 +26,7 @@ export async function runSelfTest({ getConfig, updateModule, updateGeneral, togg
   check('migración: respaldo v1 y claves viejas borradas', hasStoreKey('_v1Backup') && !hasStoreKey('settings'))
 
   // --- widgets ---
-  const clock = widgets.get('clock')
+  let clock = widgets.get('clock')
   const pomo = widgets.get('pomodoro')
   check('widgets visibles', clock?.isVisible() && pomo?.isVisible())
   const hwin = widgets.get('habits')
@@ -57,12 +58,22 @@ export async function runSelfTest({ getConfig, updateModule, updateGeneral, togg
   await sleep(200)
   check('capa: al fondo (normal por ahora)', !clock.isAlwaysOnTop())
 
+  // --- Memory: one shared renderer process for every widget ---
+  const pidOf = (w) => w.webContents.getOSProcessId()
+  const hostPid = windowHost.webContents()?.getOSProcessId()
+  const widgetPids = widgets.all().map(pidOf)
+  check('los widgets comparten un solo proceso', windowHost.isShared() && widgetPids.length === 3 && widgetPids.every((p) => p === hostPid), widgetPids.join(','))
+  const tabs = () => app.getAppMetrics().filter((m) => m.type === 'Tab').length
+  check('un único proceso de renderizado para 3 widgets', tabs() === 1, tabs())
+
   toggleAllWidgets()
   await sleep(500)
-  check('ocultar todos', !clock.isVisible() && !pomo.isVisible())
+  check('ocultar todos libera sus ventanas', widgets.get('clock') === null && widgets.get('pomodoro') === null && clock.isDestroyed() && pomo.isDestroyed())
   toggleAllWidgets()
-  await sleep(800)
-  check('mostrar todos', clock.isVisible() && pomo.isVisible())
+  await sleep(2500)
+  clock = widgets.get('clock')
+  check('mostrar todos los vuelve a abrir', !!clock?.isVisible() && !!widgets.get('pomodoro')?.isVisible())
+  check('…y siguen en el proceso compartido', widgets.all().every((w) => pidOf(w) === hostPid))
 
   updateModule('clock', { enabled: false })
   await sleep(500)
@@ -95,8 +106,11 @@ export async function runSelfTest({ getConfig, updateModule, updateGeneral, togg
   await sleep(1200)
   check('pausa', snap().secondsLeft === paused && !snap().running)
 
-  // Hidden widget: the timer keeps running.
-  updateModule('pomodoro', { widget: { visible: false } })
+  // Hidden widget: no window, but the timer keeps running and the chime plays.
+  updateModule('pomodoro', { widget: { visible: false }, settings: { soundEnabled: true } })
+  await sleep(300)
+  check('widget oculto: sin ventana', widgets.get('pomodoro') === null)
+  const soundsBefore = await windowHost.webContents().executeJavaScript('window.__sounds ?? 0')
   svc.debug.start()
   svc.debug.setRemaining(1)
   await sleep(1700)
@@ -104,9 +118,12 @@ export async function runSelfTest({ getConfig, updateModule, updateGeneral, togg
   check('con widget oculto el foco termina y arranca el descanso', s1.phase === 'short' && s1.cycleCount === 1 && s1.running, `${s1.phase} ${s1.cycleCount} ${s1.running}`)
   check('tarea +1 pomodoro', getData('pomodoro', 'tasks', []).find((t) => t.id === 'seed-task')?.pomodoros === 3)
   check('historial registrado', getData('pomodoro', 'history', []).length === 1)
+  const soundsAfter = await windowHost.webContents().executeJavaScript('window.__sounds ?? 0')
+  check('el sonido suena con el widget oculto', soundsAfter === soundsBefore + 1, `${soundsBefore} -> ${soundsAfter}`)
+  updateModule('pomodoro', { widget: { visible: true }, settings: { soundEnabled: false } })
+  await sleep(2500)
   const phaseText = await js(widgets.get('pomodoro'), `document.querySelector('[data-testid="pomodoro-phase"]')?.textContent ?? ''`)
-  check('el widget oculto recibe el estado', /descanso/i.test(phaseText), phaseText)
-  updateModule('pomodoro', { widget: { visible: true } })
+  check('al volver a mostrarlo, el widget trae el estado actual', /descanso/i.test(phaseText), phaseText)
 
   svc.debug.setRemaining(1)
   await sleep(1700)
@@ -243,6 +260,7 @@ export async function runSelfTest({ getConfig, updateModule, updateGeneral, togg
   await sleep(1500)
   const ys = toasts.windows().map((w) => w.getBounds().y)
   check('apilado: 4 visibles y 1 en cola', toasts.count() === 4 && toasts.queued() === 1 && ys.every((y, i) => i === 0 || y > ys[i - 1]), ys.join(','))
+  check('las tarjetas usan el proceso compartido', toasts.windows().every((w) => pidOf(w) === hostPid))
   toasts.closeAll()
   await sleep(500)
 
@@ -301,6 +319,7 @@ export async function runSelfTest({ getConfig, updateModule, updateGeneral, togg
   await sleep(3000)
   const panel = getPanel()
   check('panel abre', !!(await js(panel, `!!document.querySelector('[data-testid="panel"]')`)))
+  check('el Panel va en su propio proceso (se libera al cerrarlo)', panel && pidOf(panel) !== hostPid)
   await js(panel, `document.querySelector('[data-testid="module-toggle-clock"]')?.click(); true`)
   await sleep(700)
   check('interruptor del panel desactiva el reloj', getConfig().modules.clock.enabled === false)
