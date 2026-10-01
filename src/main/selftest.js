@@ -246,6 +246,56 @@ export async function runSelfTest({ getConfig, updateModule, updateGeneral, togg
   toasts.closeAll()
   await sleep(500)
 
+  // --- Phase 4: clock styles, world clocks, platform features ---
+  const rt = getConfig().runtime
+  check('capacidades del equipo informadas', rt && typeof rt.desktopLayer === 'boolean' && typeof rt.glass === 'boolean', JSON.stringify(rt))
+  updateModule('clock', { settings: { style: 'analog' } })
+  await sleep(700)
+  check('reloj analógico', !!(await js(widgets.get('clock'), `!!document.querySelector('[data-testid="analog-clock"]')`)))
+  updateModule('clock', {
+    settings: { worldClocks: [{ city: 'Madrid', tz: 'Europe/Madrid' }, { city: 'Tokio', tz: 'Asia/Tokyo' }] },
+    widget: { size: 'large' }
+  })
+  await sleep(900)
+  const worldCount = await js(widgets.get('clock'), `document.querySelectorAll('[data-testid="world-clock"]').length`)
+  const worldText = await js(widgets.get('clock'), `document.querySelector('[data-testid="clock-widget"]').textContent`)
+  check('relojes de otras ciudades en tamaño grande', worldCount === 2 && /Tokio/.test(worldText) && /Mañana|Hoy|Ayer/.test(worldText), `${worldCount} ${worldText.slice(0, 80)}`)
+  updateModule('clock', { settings: { style: 'flip', worldClocks: [] }, widget: { size: 'medium' } })
+  await sleep(500)
+
+  const clockBefore = widgets.get('clock')
+  const sizeBefore = clockBefore.getBounds()
+  updateGeneral({ glass: true })
+  await sleep(600)
+  const clockAfter = widgets.get('clock')
+  if (rt.glass) {
+    const after = clockAfter?.getBounds()
+    check(
+      'vidrio: ventanas reconstruidas sin margen y la tarjeta no se mueve',
+      clockAfter !== clockBefore && after.width === sizeBefore.width - 2 * WIDGET_PAD && after.x === sizeBefore.x + WIDGET_PAD && after.y === sizeBefore.y + WIDGET_PAD,
+      `${JSON.stringify(sizeBefore)} -> ${JSON.stringify(after)}`
+    )
+    await sleep(2500)
+    const glassClass = await js(widgets.get('clock'), `!!document.querySelector('.glass-card')`)
+    check('vidrio: la tarjeta usa el estilo translúcido', glassClass === true)
+  } else {
+    check('vidrio no soportado: nada cambia', clockAfter === clockBefore && clockAfter.getBounds().width === sizeBefore.width)
+  }
+  updateGeneral({ glass: false })
+  await sleep(rt.glass ? 2500 : 300)
+  if (rt.glass) {
+    const back = widgets.get('clock').getBounds()
+    check('vidrio desactivado: vuelve al tamaño y posición originales', back.width === sizeBefore.width && back.x === sizeBefore.x && back.y === sizeBefore.y, JSON.stringify(back))
+  }
+
+  updateModule('habits', { widget: { layer: 'bottom' } })
+  await sleep(300)
+  const hw = widgets.get('habits')
+  check(rt.desktopLayer ? 'al fondo: no queda encima y no roba el foco' : 'al fondo sin soporte: ventana normal', !hw.isAlwaysOnTop() && (rt.desktopLayer ? !hw.isFocusable() : hw.isFocusable()))
+  updateModule('habits', { widget: { layer: 'top' } })
+  await sleep(300)
+  check('vuelve a «siempre encima»', hw.isAlwaysOnTop() && hw.isFocusable())
+
   // --- Control Panel ---
   showPanel('modules')
   await sleep(3000)

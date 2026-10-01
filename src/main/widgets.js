@@ -1,14 +1,15 @@
 // One frameless, transparent window per enabled module.
 import { BrowserWindow, screen } from 'electron'
 import { MANIFESTS, getManifest } from '../modules/manifests.js'
-import { WIDGET_PAD, widgetWindowSize } from '../shared/config.js'
+import { WIDGET_PAD, glassActive, widgetPad, widgetWindowSize } from '../shared/config.js'
+import { applyGlass, desktopHandle, sendToBack, setDesktopOwner, supports } from './native.js'
 import { baseWebPreferences, loadView } from './views.js'
 
 const SNAP_THRESHOLD = 60
 const VISUAL_GAP = 12 // space between stacked cards
 const VISUAL_EDGE = 16 // space between a card and the screen edge (default placement)
 
-export function createWidgetManager({ getConfig, savePosition, onContextMenu, onCloseRequest, isQuitting, log }) {
+export function createWidgetManager({ getConfig, savePosition, onContextMenu, onCloseRequest, isQuitting, isDark, log }) {
   const windows = new Map() // moduleId -> BrowserWindow
   const alive = (w) => w && !w.isDestroyed()
 
@@ -24,10 +25,10 @@ export function createWidgetManager({ getConfig, savePosition, onContextMenu, on
 
   // First free spot for a new widget: columns from the bottom-right corner,
   // filled bottom-up, without covering any widget already on screen.
-  function freeSpot(width, height) {
+  function freeSpot(width, height, pad = WIDGET_PAD) {
     const wa = screen.getPrimaryDisplay().workArea
-    const edge = VISUAL_EDGE - WIDGET_PAD
-    const card = (b) => ({ x: b.x + WIDGET_PAD, y: b.y + WIDGET_PAD, w: b.width - 2 * WIDGET_PAD, h: b.height - 2 * WIDGET_PAD })
+    const edge = VISUAL_EDGE - pad
+    const card = (b) => ({ x: b.x + pad, y: b.y + pad, w: b.width - 2 * pad, h: b.height - 2 * pad })
     const taken = [...windows.values()].filter(alive).map((w) => card(w.getBounds()))
     const clash = (r) =>
       taken.some(
@@ -35,7 +36,7 @@ export function createWidgetManager({ getConfig, savePosition, onContextMenu, on
           r.x < o.x + o.w + VISUAL_GAP && o.x < r.x + r.w + VISUAL_GAP && r.y < o.y + o.h + VISUAL_GAP && o.y < r.y + r.h + VISUAL_GAP
       )
     for (let col = 0; col < 4; col++) {
-      const x = wa.x + wa.width - edge - width - col * (width - 2 * WIDGET_PAD + VISUAL_GAP)
+      const x = wa.x + wa.width - edge - width - col * (width - 2 * pad + VISUAL_GAP)
       if (x < wa.x) break
       for (let y = wa.y + wa.height - edge - height; y >= wa.y; y -= 4) {
         if (!clash(card({ x, y, width, height }))) return { x, y }
@@ -106,10 +107,11 @@ export function createWidgetManager({ getConfig, savePosition, onContextMenu, on
   function create(id, cfg) {
     const manifest = getManifest(id)
     const mod = cfg.modules[id]
-    const [width, height] = widgetWindowSize(mod.widget.size)
+    const pad = widgetPad(cfg)
+    const [width, height] = widgetWindowSize(mod.widget.size, pad)
     const saved = mod.widget.position
     const hasSaved = saved && isOnScreen({ ...saved, width, height })
-    const pos = hasSaved ? saved : freeSpot(width, height)
+    const pos = hasSaved ? saved : freeSpot(width, height, pad)
     // Remember the automatic spot so the layout stays the same on the next launch.
     if (!hasSaved) savePosition(id, { x: Math.round(pos.x), y: Math.round(pos.y) })
 
@@ -134,10 +136,15 @@ export function createWidgetManager({ getConfig, savePosition, onContextMenu, on
     })
     win.__ready = false
 
+    win.__glass = glassActive(cfg)
     win.once('ready-to-show', () => {
       win.__ready = true
+      if (win.__glass && !applyGlass(win, isDark())) log(`[widget:${id}] glass backdrop could not be applied`)
       apply(id, getConfig())
     })
+    // Widgets "al fondo" go back behind other windows whenever they are shown or clicked.
+    win.on('show', () => win.__pinned && sendToBack(win))
+    win.on('focus', () => win.__pinned && setTimeout(() => alive(win) && sendToBack(win), 0))
     win.on('close', (e) => {
       if (isQuitting()) return
       e.preventDefault()
@@ -165,7 +172,7 @@ export function createWidgetManager({ getConfig, savePosition, onContextMenu, on
     if (!alive(win)) return
     const { widget } = cfg.modules[id]
 
-    const [w, h] = widgetWindowSize(widget.size)
+    const [w, h] = widgetWindowSize(widget.size, widgetPad(cfg))
     const b = win.getBounds()
     if (b.width !== w || b.height !== h) {
       // Keep the top-left corner in place (or the snapped corner), then stay on screen.
@@ -179,13 +186,40 @@ export function createWidgetManager({ getConfig, savePosition, onContextMenu, on
     if (win.isAlwaysOnTop() !== onTop) win.setAlwaysOnTop(onTop, 'screen-saver')
     if (onTop) win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
 
+    // "Al fondo" on Windows: owned by the desktop, not focusable, sent to the back.
+    // Elsewhere it is simply a normal (not always-on-top) window.
+    const pin = widget.layer === 'bottom' && supports.desktopLayer()
+    if (pin !== !!win.__pinned) {
+      if (pin) {
+        win.__pinned = setDesktopOwner(win, true)
+        if (win.__pinned) win.setFocusable(false)
+      } else {
+        setDesktopOwner(win, false)
+        win.setFocusable(true)
+        win.__pinned = false
+      }
+    }
+
     win.setOpacity(widget.opacity)
     win.setIgnoreMouseEvents(!!cfg.general.clickThrough, { forward: true })
 
     if (!win.__ready) return
     if (widget.visible && !win.isVisible()) win.showInactive()
     else if (!widget.visible && win.isVisible()) win.hide()
+    if (win.__pinned) sendToBack(win)
   }
+
+  // If Explorer restarts, the desktop window changes: pin the widgets again.
+  let lastDesktop = 0
+  setInterval(() => {
+    if (!supports.desktopLayer()) return
+    const current = desktopHandle()
+    if (current && current !== lastDesktop) {
+      const changed = lastDesktop !== 0
+      lastDesktop = current
+      if (changed) for (const win of windows.values()) if (alive(win) && win.__pinned) setDesktopOwner(win, true)
+    }
+  }, 30 * 1000)
 
   function destroy(id) {
     const win = windows.get(id)

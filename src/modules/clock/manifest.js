@@ -2,13 +2,15 @@
 export default {
   id: 'clock',
   name: 'Reloj',
-  description: 'Reloj flip con la fecha del día.',
+  description: 'Reloj flip o analógico, con la fecha y otras ciudades.',
   icon: '🕐',
   sizes: ['small', 'medium', 'large'],
   defaultEnabled: true,
   defaultSettings: {
-    clockFormat: 'auto', // 'auto' | '12' | '24'
-    style: 'flip' // 'flip' ('analog' arrives in phase 4)
+    clockFormat: 'auto', // 'auto' | '12' | '24' (flip style)
+    style: 'flip', // 'flip' | 'analog'
+    showSeconds: true, // analog second hand
+    worldClocks: [] // [{ city, tz }] shown in the large size, up to 3
   },
   defaultWidget: { size: 'medium', layer: 'bottom' }
 }

@@ -4,11 +4,13 @@ import { invoke } from '../lib/ipc'
 // children must use the `no-drag` class. Right-click opens the widget menu
 // (size, layer, corner, hide...). On Windows, right-clicks on the draggable area
 // are handled by the main process ('system-context-menu').
-export default function WidgetFrame({ children }) {
+// In glass mode the window itself is the card (Windows draws the blur and the
+// rounded corners), so there is no margin and the card is more transparent.
+export default function WidgetFrame({ children, glass = false }) {
   return (
-    <div className="h-screen w-screen p-3">
+    <div className={`h-screen w-screen ${glass ? '' : 'p-3'}`}>
       <div
-        className="widget-card drag relative h-full w-full overflow-hidden rounded-[22px] text-fg"
+        className={`drag relative h-full w-full overflow-hidden text-fg ${glass ? 'glass-card rounded-[8px]' : 'widget-card rounded-[22px]'}`}
         onContextMenu={(e) => {
           e.preventDefault()
           invoke('widget:context-menu')

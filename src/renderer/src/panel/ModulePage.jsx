@@ -12,7 +12,7 @@ const CORNERS = [
   { value: 'bottom-right', label: 'Abajo a la derecha' }
 ]
 
-function WidgetSettings({ id, manifest, widget }) {
+function WidgetSettings({ id, manifest, widget, runtime }) {
   const set = (patch) => setWidget(id, patch)
   return (
     <Group title="Widget" footer="También puedes cambiar estas opciones con clic derecho sobre el widget.">
@@ -30,9 +30,11 @@ function WidgetSettings({ id, manifest, widget }) {
       <Row
         label="Capa"
         hint={
-          widget.layer === 'bottom'
-            ? 'Por ahora «Al fondo» deja el widget como una ventana normal que otras ventanas pueden tapar.'
-            : undefined
+          widget.layer !== 'bottom'
+            ? 'Siempre encima: el widget queda por delante de todas tus ventanas.'
+            : runtime?.desktopLayer
+              ? 'Al fondo: detrás de tus ventanas, sobre el fondo de pantalla. Sigue visible con Win+D.'
+              : 'En este equipo «Al fondo» funciona como una ventana normal que otras ventanas pueden tapar.'
         }
       >
         <Segmented
@@ -81,7 +83,7 @@ export default function ModulePage({ id, config }) {
       {mod.enabled ? (
         <>
           {Panel && <Panel settings={mod.settings} config={config} />}
-          <WidgetSettings id={id} manifest={manifest} widget={mod.widget} />
+          <WidgetSettings id={id} manifest={manifest} widget={mod.widget} runtime={config.runtime} />
         </>
       ) : (
         <div className="rounded-xl bg-group px-6 py-10 text-center">

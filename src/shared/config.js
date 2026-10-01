@@ -19,10 +19,14 @@ export const CARD_SIZES = {
 // Transparent margin around the card so its CSS shadow isn't clipped.
 export const WIDGET_PAD = 12
 
-export const widgetWindowSize = (size) => {
+// In glass mode (Windows 11) the window *is* the card, so there is no margin.
+export const widgetWindowSize = (size, pad = WIDGET_PAD) => {
   const [w, h] = CARD_SIZES[size] ?? CARD_SIZES.medium
-  return [w + WIDGET_PAD * 2, h + WIDGET_PAD * 2]
+  return [w + pad * 2, h + pad * 2]
 }
+
+export const glassActive = (cfg) => !!(cfg?.general?.glass && cfg?.runtime?.glass)
+export const widgetPad = (cfg) => (glassActive(cfg) ? 0 : WIDGET_PAD)
 
 export const SIZE_LABELS = { small: 'Pequeño', medium: 'Mediano', large: 'Grande' }
 
@@ -33,7 +37,8 @@ export const GENERAL_DEFAULTS = {
   theme: 'system', // 'system' | 'dark' | 'light'
   accent: '#f97316',
   launchAtLogin: false,
-  clickThrough: false
+  clickThrough: false,
+  glass: false // experimental acrylic background (Windows 11 22H2+)
 }
 
 export const WIDGET_DEFAULTS = {

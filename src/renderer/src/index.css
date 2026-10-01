@@ -70,6 +70,16 @@ html.panel-view body {
   box-shadow: var(--card-shadow);
 }
 
+/* Glass mode: Windows draws an acrylic blur behind the window; the card only tints it. */
+.glass-card {
+  background: rgba(246, 246, 248, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+}
+.dark .glass-card {
+  background: rgba(28, 28, 32, 0.5);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
 .tnum {
   font-variant-numeric: tabular-nums;
 }

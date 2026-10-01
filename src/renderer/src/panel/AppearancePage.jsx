@@ -30,6 +30,24 @@ export default function AppearancePage({ config }) {
             ]}
           />
         </Row>
+        <Row
+          label="Fondo de los widgets"
+          hint={
+            config.runtime?.glass
+              ? 'Vidrio: Windows difumina lo que hay detrás del widget. Es experimental; si se ve mal, vuelve a «Sólido».'
+              : 'El vidrio necesita Windows 11 (versión 22H2 o posterior).'
+          }
+        >
+          <Segmented
+            label="Fondo de los widgets"
+            value={g.glass && config.runtime?.glass ? 'glass' : 'solid'}
+            onChange={(v) => setGeneral({ glass: v === 'glass' })}
+            options={[
+              { value: 'solid', label: 'Sólido' },
+              { value: 'glass', label: 'Vidrio', disabled: !config.runtime?.glass }
+            ]}
+          />
+        </Row>
         <Row label="Color de acento">
           <div role="radiogroup" aria-label="Color de acento" className="flex gap-2">
             {ACCENTS.map((a) => (
