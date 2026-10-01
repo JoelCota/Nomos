@@ -271,8 +271,26 @@ export default function createHabitsService(ctx) {
     },
     // Sync with the Nomos server: one document per habit and per day/habit cell.
     sync: {
-      collections: ['habits', 'habitLog'],
-      exportDocs: () => ({ habits: listToDocs(habits(), { order: true }), habitLog: logToDocs(log()) }),
+      // habitSettings/main tells the server (phone reminders) and the phone app
+      // when the day starts, the summary time and this PC's time zone. The PC is
+      // its only source, so incoming copies are ignored.
+      collections: ['habits', 'habitLog', 'habitSettings'],
+      exportDocs: () => {
+        const s = ctx.getSettings()
+        return {
+          habits: listToDocs(habits(), { order: true }),
+          habitLog: logToDocs(log()),
+          habitSettings: {
+            main: {
+              dayStartHour: s.dayStartHour ?? 0,
+              remindersEnabled: s.remindersEnabled !== false,
+              summaryEnabled: !!s.summaryEnabled,
+              summaryTime: s.summaryTime ?? '20:30',
+              tz: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+            }
+          }
+        }
+      },
       importDocs(changes) {
         const g = groupByCollection(changes)
         if (g.habits) {

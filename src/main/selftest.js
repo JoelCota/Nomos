@@ -414,6 +414,29 @@ export async function runSelfTest({ getConfig, updateModule, updateGeneral, togg
     const gone = remote3.docs.find((d) => d.collection === 'habits' && d.id === created.id)
     check('borrar en la PC lo borra en el servidor', gone?.deleted === true)
 
+    // The settings the server needs for phone reminders went up too.
+    const settingsDoc = remote3.docs.find((d) => d.collection === 'habitSettings' && d.id === 'main')
+    check('ajustes de hábitos (zona horaria) en el servidor', !!settingsDoc?.data?.tz && settingsDoc.data.summaryTime === getConfig().modules.habits.settings.summaryTime, JSON.stringify(settingsDoc?.data))
+
+    // Link a phone from the Panel.
+    await js(panel, `document.querySelector('[data-testid="sync-pair"]').click(); true`)
+    await sleep(1500)
+    const code = await js(panel, `document.querySelector('[data-testid="sync-pair-code"]')?.textContent ?? ''`)
+    const qr = await js(panel, `!!document.querySelector('[data-testid="sync-pairing"] svg')`)
+    check('vincular celular: código y QR', /^[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(code) && qr, code)
+    const claim = await fetch(`${syncUrl}/api/pair/claim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, name: 'iPhone del test' })
+    }).then((r) => r.json())
+    await sleep(4500)
+    const listed = await js(panel, `[...document.querySelectorAll('[data-testid="sync-device"]')].map((e) => e.textContent).join('|')`)
+    check('el celular aparece en el Panel', claim.ok && /iPhone del test/.test(listed) && !(await js(panel, `!!document.querySelector('[data-testid="sync-pairing"]')`)), listed)
+    await js(panel, `[...document.querySelectorAll('[data-testid="sync-device"] button')].find((b) => b.textContent.includes('Desvincular'))?.click(); true`)
+    await sleep(1500)
+    const revoked = await fetch(`${syncUrl}/api/me`, { headers: { Authorization: `Bearer ${claim.token}` } })
+    check('desvincular el celular desde el Panel', revoked.status === 401 && (await js(panel, `document.querySelectorAll('[data-testid="sync-device"]').length`)) === 0)
+
     await js(panel, `document.querySelector('[data-testid="sync-disconnect"]').click(); true`)
     await sleep(600)
     check('desconectar', sync.status().connected === false && !!(await js(panel, `!!document.querySelector('[data-testid="sync-url"]')`)))

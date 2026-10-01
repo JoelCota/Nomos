@@ -1,15 +1,16 @@
 {
   "name": "nomos-api",
   "version": "1.0.0",
-  "description": "Nomos sync API (Cloudflare Worker + D1)",
+  "description": "Nomos sync API and phone app (Cloudflare Worker + D1)",
   "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "dev": "npm --prefix .. run build:web && wrangler dev",
+    "deploy": "npm --prefix .. run build:web && wrangler deploy",
     "test": "node --test test/*.test.js"
   },
   "author": "",
   "license": "ISC",
   "devDependencies": {
+    "http_ece": "^1.2.1",
     "wrangler": "^4.145.0"
   },
   "private": true,

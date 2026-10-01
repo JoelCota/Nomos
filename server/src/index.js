@@ -1,152 +1,130 @@
-// Nomos sync API — a Cloudflare Worker backed by D1.
+// Nomos API — a Cloudflare Worker backed by D1.
 //
-// Every synced record is a document identified by (collection, id). Clients push
-// changes with their own timestamp and the newest one wins (last writer wins per
-// document). Each accepted write gets a new global `seq`, so a client pulls
-// everything that changed with GET /api/sync?since=<last seq it saw>.
+//   /api/*   this Worker (sync, linking phones, Web Push)
+//   /*       the phone app (static files in public/, served by Cloudflare)
 //
-// All /api routes except /api/health need `Authorization: Bearer <NOMOS_TOKEN>`.
+// Every /api route except /api/health and /api/pair/claim needs
+// `Authorization: Bearer <token>`: the master token (the PC) or a device token
+// (a linked phone). See README.md.
+import { CORS, HttpError, fail, json, kvDelete, kvGet, kvSet, randomToken, readJson, sha256Hex } from './http.js'
+import { authenticate, touch } from './auth.js'
+import { currentSeq, pull, push } from './docs.js'
+import { pushToDevices, vapidKeys } from './webpush.js'
+import { runReminders } from './reminders.js'
 
-const VERSION = 1
-const MAX_CHANGES = 200
-const MAX_DATA_BYTES = 16 * 1024
-const MAX_PULL = 500
-const MAX_CLOCK_AHEAD_MS = 60 * 1000
-const COLLECTION_RE = /^[a-zA-Z][a-zA-Z0-9_-]{0,39}$/
+const VERSION = 2
+const PAIR_TTL_MS = 10 * 60 * 1000
+const PAIR_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789' // no 0/O, 1/I
+const NOTIFY = ['always', 'away', 'never']
 
-const CORS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Authorization, Content-Type',
-  'Access-Control-Max-Age': '86400'
+const needDb = (env) => {
+  if (!env.DB) throw new HttpError(500, 'El servidor no tiene base de datos (binding DB).')
+  return env.DB
+}
+const ownerOnly = (who) => {
+  if (who.role !== 'owner') throw new HttpError(403, 'Solo Nomos en tu PC puede hacer esto.')
+}
+const deviceOnly = (who) => {
+  if (who.role !== 'device') throw new HttpError(403, 'Esto es solo para un celular vinculado.')
 }
 
-const json = (body, status = 200) =>
-  new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', ...CORS } })
-const fail = (status, error) => json({ ok: false, error }, status)
-
-class HttpError extends Error {
-  constructor(status, message) {
-    super(message)
-    this.status = status
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Auth
-
-async function authorized(request, env) {
-  const expected = env.NOMOS_TOKEN
-  if (!expected) throw new HttpError(500, 'El servidor no tiene token configurado (NOMOS_TOKEN).')
-  const header = request.headers.get('Authorization') ?? ''
-  const given = header.startsWith('Bearer ') ? header.slice(7).trim() : ''
-  const enc = new TextEncoder()
-  const a = enc.encode(given)
-  const b = enc.encode(expected)
-  // Constant-time comparison (compare against itself when lengths differ).
-  if (a.byteLength !== b.byteLength) {
-    crypto.subtle.timingSafeEqual(b, b)
-    return false
-  }
-  return crypto.subtle.timingSafeEqual(a, b)
-}
-
-// ---------------------------------------------------------------------------
-// Documents
-
-const rowToDoc = (r) => ({
-  collection: r.collection,
-  id: r.id,
-  data: r.deleted ? null : JSON.parse(r.data),
-  deleted: !!r.deleted,
-  updatedAt: r.updated_at,
-  seq: r.seq
+const publicDevice = (d, pushCount = 0) => ({
+  id: d.id,
+  name: d.name,
+  notify: d.notify,
+  createdAt: d.created_at,
+  lastSeen: d.last_seen,
+  push: pushCount > 0
 })
 
-const currentSeq = async (db) => (await db.prepare(`SELECT value FROM meta WHERE key = 'seq'`).first('value')) ?? 0
+// ---------------------------------------------------------------------------
+// Linking a phone: the PC asks for a short code, the phone trades it for a token.
 
-// Validates and normalizes the pushed changes. Later duplicates of the same
-// document replace earlier ones.
-function cleanChanges(input, now) {
-  if (!Array.isArray(input)) throw new HttpError(400, '"changes" debe ser una lista.')
-  if (input.length > MAX_CHANGES) throw new HttpError(413, `Máximo ${MAX_CHANGES} cambios por petición.`)
-  const byKey = new Map()
-  for (const c of input) {
-    if (!c || typeof c !== 'object') throw new HttpError(400, 'Cambio inválido.')
-    if (typeof c.collection !== 'string' || !COLLECTION_RE.test(c.collection)) throw new HttpError(400, 'Colección inválida.')
-    if (typeof c.id !== 'string' || !c.id || c.id.length > 128) throw new HttpError(400, 'Id inválido.')
-    const updatedAt = Number(c.updatedAt)
-    if (!Number.isFinite(updatedAt) || updatedAt <= 0) throw new HttpError(400, 'updatedAt inválido.')
-    const deleted = c.deleted === true || c.data === null || c.data === undefined
-    let data = null
-    if (!deleted) {
-      if (typeof c.data !== 'object' || Array.isArray(c.data)) throw new HttpError(400, '"data" debe ser un objeto.')
-      data = JSON.stringify(c.data)
-      if (new TextEncoder().encode(data).byteLength > MAX_DATA_BYTES) throw new HttpError(413, 'Documento demasiado grande.')
-    }
-    // A client clock far in the future would win every conflict: cap it.
-    const u = Math.round(Math.min(updatedAt, now + MAX_CLOCK_AHEAD_MS))
-    byKey.set(`${c.collection}\u0000${c.id}`, { c: c.collection, i: c.id, d: data, x: deleted ? 1 : 0, u })
-  }
-  return [...byKey.values()]
+function newPairCode() {
+  const bytes = crypto.getRandomValues(new Uint8Array(8))
+  const s = [...bytes].map((b) => PAIR_ALPHABET[b % PAIR_ALPHABET.length]).join('')
+  return `${s.slice(0, 4)}-${s.slice(4)}`
+}
+const cleanCode = (c) => String(c ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '')
+
+async function pairStart(db) {
+  const code = newPairCode()
+  const expiresAt = Date.now() + PAIR_TTL_MS
+  await kvSet(db, 'pairing', { code: cleanCode(code), expiresAt })
+  return { ok: true, code, expiresAt }
 }
 
-async function push(db, body) {
-  const device = typeof body?.device === 'string' ? body.device.slice(0, 64) : ''
-  const changes = cleanChanges(body?.changes, Date.now())
-  if (!changes.length) return { ok: true, seq: await currentSeq(db), results: [] }
-  const payload = JSON.stringify(changes)
+async function pairClaim(db, body) {
+  const pending = await kvGet(db, 'pairing')
+  const code = cleanCode(body?.code)
+  if (!pending || !code || pending.code !== code || Date.now() > pending.expiresAt) {
+    throw new HttpError(400, 'El código no es válido o ya venció. Pide uno nuevo en Nomos en tu PC.')
+  }
+  await kvDelete(db, 'pairing') // single use
+  const token = randomToken()
+  const device = {
+    id: crypto.randomUUID(),
+    name: String(body?.name ?? '').trim().slice(0, 40) || 'Celular',
+    created_at: Date.now()
+  }
+  await db
+    .prepare(`INSERT INTO devices (id, name, token_hash, notify, created_at) VALUES (?1, ?2, ?3, 'always', ?4)`)
+    .bind(device.id, device.name, await sha256Hex(token), device.created_at)
+    .run()
+  return { ok: true, token, device: publicDevice({ ...device, notify: 'always', last_seen: null }) }
+}
 
-  // One atomic batch: insert/update every document whose timestamp is newer
-  // (ties broken by device id), numbering them after the current seq, then move
-  // the counter forward.
-  await db.batch([
-    db
-      .prepare(
-        `INSERT INTO docs (collection, id, data, deleted, updated_at, device, seq)
-         SELECT json_extract(j.value, '$.c'), json_extract(j.value, '$.i'), json_extract(j.value, '$.d'),
-                json_extract(j.value, '$.x'), json_extract(j.value, '$.u'), ?2,
-                (SELECT value FROM meta WHERE key = 'seq') + j.key + 1
-         FROM json_each(?1) AS j WHERE true
-         ON CONFLICT (collection, id) DO UPDATE SET
-           data = excluded.data, deleted = excluded.deleted, updated_at = excluded.updated_at,
-           device = excluded.device, seq = excluded.seq
-         WHERE excluded.updated_at > docs.updated_at
-            OR (excluded.updated_at = docs.updated_at AND excluded.device > docs.device)`
-      )
-      .bind(payload, device),
-    db.prepare(`UPDATE meta SET value = value + ?1 WHERE key = 'seq'`).bind(changes.length)
-  ])
-
-  const { results: rows } = await db
+async function listDevices(db) {
+  const { results } = await db
     .prepare(
-      `SELECT collection, id, data, deleted, updated_at, device, seq FROM docs
-       WHERE (collection, id) IN (SELECT json_extract(value, '$.c'), json_extract(value, '$.i') FROM json_each(?1))`
+      `SELECT d.*, (SELECT COUNT(*) FROM push_subs s WHERE s.device_id = d.id) AS subs
+       FROM devices d ORDER BY d.created_at`
     )
-    .bind(payload)
     .all()
-  const byKey = new Map(rows.map((r) => [`${r.collection}\u0000${r.id}`, r]))
-  const results = changes.map((ch) => {
-    const r = byKey.get(`${ch.c}\u0000${ch.i}`)
-    const applied = !!r && r.updated_at === ch.u && r.device === device && r.deleted === ch.x
-    return { collection: ch.c, id: ch.i, status: applied ? 'applied' : 'stale', doc: r ? rowToDoc(r) : null }
-  })
-  return { ok: true, seq: await currentSeq(db), results }
+  return { ok: true, devices: results.map((d) => publicDevice(d, d.subs)) }
 }
 
-async function pull(db, url) {
-  const since = Math.max(0, Math.floor(Number(url.searchParams.get('since') ?? 0)) || 0)
-  const limit = Math.min(MAX_PULL, Math.max(1, Math.floor(Number(url.searchParams.get('limit') ?? MAX_PULL)) || MAX_PULL))
-  const { results: rows } = await db
-    .prepare(`SELECT collection, id, data, deleted, updated_at, seq FROM docs WHERE seq > ?1 ORDER BY seq LIMIT ?2`)
-    .bind(since, limit)
-    .all()
-  return {
-    ok: true,
-    docs: rows.map(rowToDoc),
-    seq: rows.length ? rows[rows.length - 1].seq : since,
-    more: rows.length === limit
+async function removeDevice(db, id) {
+  await db.batch([
+    db.prepare('DELETE FROM push_subs WHERE device_id = ?1').bind(id),
+    db.prepare('DELETE FROM devices WHERE id = ?1').bind(id)
+  ])
+  return { ok: true }
+}
+
+async function deviceInfo(db, device) {
+  const subs = await db.prepare('SELECT COUNT(*) AS n FROM push_subs WHERE device_id = ?1').bind(device.id).first('n')
+  return { ok: true, device: publicDevice(device, subs) }
+}
+
+async function updateDevice(db, device, body) {
+  const notify = NOTIFY.includes(body?.notify) ? body.notify : device.notify
+  const name = typeof body?.name === 'string' && body.name.trim() ? body.name.trim().slice(0, 40) : device.name
+  await db.prepare('UPDATE devices SET notify = ?1, name = ?2 WHERE id = ?3').bind(notify, name, device.id).run()
+  return deviceInfo(db, { ...device, notify, name })
+}
+
+// ---------------------------------------------------------------------------
+// Web Push subscriptions
+
+async function subscribe(db, device, body, origin, testMode = false) {
+  const endpoint = String(body?.endpoint ?? '')
+  const p256dh = String(body?.keys?.p256dh ?? '')
+  const auth = String(body?.keys?.auth ?? '')
+  const allowed = /^https:\/\//.test(endpoint) || (testMode && /^http:\/\/127\.0\.0\.1[:/]/.test(endpoint))
+  if (!allowed || endpoint.length > 1000 || !p256dh || !auth) {
+    throw new HttpError(400, 'Suscripción inválida.')
   }
+  await db
+    .prepare(
+      `INSERT INTO push_subs (endpoint, device_id, p256dh, auth, created_at) VALUES (?1, ?2, ?3, ?4, ?5)
+       ON CONFLICT (endpoint) DO UPDATE SET device_id = excluded.device_id, p256dh = excluded.p256dh, auth = excluded.auth`
+    )
+    .bind(endpoint, device.id, p256dh, auth, Date.now())
+    .run()
+  // The VAPID "sub" claim: this server's public address.
+  if (/^https:\/\//.test(origin)) await kvSet(db, 'origin', origin)
+  return { ok: true }
 }
 
 // ---------------------------------------------------------------------------
@@ -155,25 +133,87 @@ async function pull(db, url) {
 async function route(request, env) {
   const url = new URL(request.url)
   const { pathname } = url
-  if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS })
+  const method = request.method
+  if (method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS })
 
-  if (pathname === '/api/health' && request.method === 'GET') return json({ ok: true, app: 'nomos', version: VERSION })
+  if (pathname === '/api/health' && method === 'GET') return json({ ok: true, app: 'nomos', version: VERSION })
+  if (pathname === '/api/pair/claim' && method === 'POST') return json(await pairClaim(needDb(env), await readJson(request)))
   if (!pathname.startsWith('/api/')) return fail(404, 'No encontrado.')
 
-  if (!(await authorized(request, env))) return fail(401, 'Token incorrecto.')
-  if (!env.DB) throw new HttpError(500, 'El servidor no tiene base de datos (binding DB).')
+  const who = await authenticate(request, env)
+  if (!who) return fail(401, 'Token incorrecto.')
+  const db = needDb(env)
+  await touch(env, who)
 
-  if (pathname === '/api/me' && request.method === 'GET') return json({ ok: true, app: 'nomos', version: VERSION, seq: await currentSeq(env.DB) })
-  if (pathname === '/api/sync' && request.method === 'GET') return json(await pull(env.DB, url))
-  if (pathname === '/api/sync' && request.method === 'POST') {
-    let body
-    try {
-      body = await request.json()
-    } catch {
-      throw new HttpError(400, 'JSON inválido.')
-    }
-    return json(await push(env.DB, body))
+  if (pathname === '/api/me' && method === 'GET') {
+    return json({ ok: true, app: 'nomos', version: VERSION, role: who.role, seq: await currentSeq(db) })
   }
+
+  // Sync
+  if (pathname === '/api/sync' && method === 'GET') return json(await pull(db, url))
+  if (pathname === '/api/sync' && method === 'POST') {
+    const body = await readJson(request)
+    const device = who.role === 'device' ? `phone:${who.device.id}` : body?.device
+    return json(await push(db, { ...body, device }))
+  }
+
+  // Linking phones (PC only)
+  if (pathname === '/api/pair/start' && method === 'POST') {
+    ownerOnly(who)
+    return json(await pairStart(db))
+  }
+  if (pathname === '/api/devices' && method === 'GET') {
+    ownerOnly(who)
+    return json(await listDevices(db))
+  }
+  const del = pathname.match(/^\/api\/devices\/([\w-]{1,64})$/)
+  if (del && method === 'DELETE') {
+    ownerOnly(who)
+    return json(await removeDevice(db, del[1]))
+  }
+
+  // This phone
+  if (pathname === '/api/device' && method === 'GET') {
+    deviceOnly(who)
+    return json(await deviceInfo(db, who.device))
+  }
+  if (pathname === '/api/device' && method === 'PATCH') {
+    deviceOnly(who)
+    return json(await updateDevice(db, who.device, await readJson(request)))
+  }
+  if (pathname === '/api/device' && method === 'DELETE') {
+    deviceOnly(who)
+    return json(await removeDevice(db, who.device.id))
+  }
+
+  // Notifications
+  if (pathname === '/api/push/key' && method === 'GET') return json({ ok: true, publicKey: (await vapidKeys(db)).publicKey })
+  if (pathname === '/api/push/subscribe' && method === 'POST') {
+    deviceOnly(who)
+    return json(await subscribe(db, who.device, await readJson(request), url.origin, env.NOMOS_TEST === '1'))
+  }
+  if (pathname === '/api/push/subscribe' && method === 'DELETE') {
+    deviceOnly(who)
+    const body = await readJson(request)
+    await db.prepare('DELETE FROM push_subs WHERE endpoint = ?1 AND device_id = ?2').bind(String(body?.endpoint ?? ''), who.device.id).run()
+    return json({ ok: true })
+  }
+  if (pathname === '/api/push/test' && method === 'POST') {
+    deviceOnly(who)
+    const sent = await pushToDevices(env, [who.device.id], {
+      title: '🌱 Nomos',
+      body: 'Así te llegarán los recordatorios de tus hábitos.',
+      tag: 'test',
+      url: '/'
+    })
+    return json({ ok: true, sent })
+  }
+
+  // Test only: run the reminder cron at a given time.
+  if (pathname === '/api/_test/reminders' && method === 'POST' && env.NOMOS_TEST === '1') {
+    return json({ ok: true, ...(await runReminders(env, Number(url.searchParams.get('now')) || Date.now())) })
+  }
+
   return fail(404, 'No encontrado.')
 }
 
@@ -186,5 +226,13 @@ export default {
       console.error(err)
       return fail(500, 'Error interno.')
     }
+  },
+  async scheduled(_event, env, ctx) {
+    if (!env.DB) return
+    ctx.waitUntil(
+      runReminders(env).catch((err) => {
+        console.error(`reminders: ${String(err)}`)
+      })
+    )
   }
 }

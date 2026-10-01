@@ -112,7 +112,10 @@ function commit(prev) {
     } else if (now && svc && prev) {
       const a = JSON.stringify(prev.modules[m.id].settings)
       const b = JSON.stringify(config.modules[m.id].settings)
-      if (a !== b) svc.onSettingsChanged(config.modules[m.id].settings, prev.modules[m.id].settings)
+      if (a !== b) {
+        svc.onSettingsChanged(config.modules[m.id].settings, prev.modules[m.id].settings)
+        syncEngine?.localChanged() // some settings are synced (e.g. habitSettings)
+      }
     }
   }
 
@@ -363,6 +366,16 @@ function registerIpc() {
   ipcMain.handle('sync:status', () => syncEngine.status())
   ipcMain.handle('sync:connect', (_e, url, token) => syncCall(() => syncEngine.connect(url, token))())
   ipcMain.handle('sync:disconnect', () => syncEngine.disconnect())
+  // Phones: a pairing code (the phone app lives at the server's address) and the list of linked devices.
+  ipcMain.handle('sync:pair-start', apiCall(async () => ({ ...(await syncEngine.call('POST', '/api/pair/start')), appUrl: syncEngine.status().url })))
+  ipcMain.handle('sync:devices', apiCall(async () => (await syncEngine.call('GET', '/api/devices')).devices))
+  ipcMain.handle('sync:device-remove', (_e, id) =>
+    apiCall(async () => {
+      if (typeof id !== 'string' || !/^[\w-]{1,64}$/.test(id)) throw new Error('Dispositivo inválido.')
+      await syncEngine.call('DELETE', `/api/devices/${id}`)
+      return (await syncEngine.call('GET', '/api/devices')).devices
+    })()
+  )
   ipcMain.handle('sync:now', syncCall(async () => {
     await syncEngine.syncNow()
     return syncEngine.status()
@@ -443,6 +456,15 @@ function createSync() {
     log
   })
   powerMonitor.on('resume', () => syncEngine.syncNow())
+}
+
+// Same for other server calls: { ok, data } or { ok: false, error }.
+const apiCall = (fn) => async () => {
+  try {
+    return { ok: true, data: await fn() }
+  } catch (err) {
+    return { ok: false, error: err.message }
+  }
 }
 
 // Errors go back as { ok: false, error } so the Panel can show the message as is.

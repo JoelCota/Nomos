@@ -94,6 +94,16 @@ Puedes publicar tu propio servidor de Nomos en Cloudflare: es gratis para uso pe
 - Si el mismo dato cambia en dos sitios, gana el cambio más reciente.
 - El token se guarda cifrado con el sistema de Windows. Tus datos viven en tu cuenta de Cloudflare, no en la de terceros.
 
+### App del celular
+
+El mismo servidor sirve una **app para el iPhone** (o cualquier celular), sin App Store: se abre en Safari y se agrega a la pantalla de inicio.
+
+- **Hoy:** tus hábitos con su anillo de progreso, rachas y la última semana. Un toque marca un hábito, suma 1 o suma 5 minutos; también puedes corregir ayer.
+- **Tareas:** agrega, completa y borra tareas. Aparecen en el Pomodoro de tu PC.
+- **Recordatorios:** las horas de tus hábitos y el resumen de la noche llegan como notificaciones, aunque la PC esté apagada. Puedes elegir que te avisen siempre, solo con la PC apagada o nunca.
+
+Para vincularla: **Panel → Sincronización → Vincular un celular** y sigue los pasos (código o QR). Cada celular tiene su propia llave y se desvincula desde ahí. Guía completa en [`server/README.md`](server/README.md#la-app-del-celular).
+
 Si usabas la versión anterior (*Pomodoro Widget*), en el primer arranque Nomos copia tus ajustes, tareas e historial. El archivo antiguo se conserva como respaldo.
 
 ## Desarrollo
@@ -111,6 +121,7 @@ npm run dev
 | `npm run build` | Compila main, preload y renderer en `out/` |
 | `npm run dist:win` | Genera el instalador de Windows en `release/` |
 | `npm run dist:mac` / `npm run dist:linux` | Genera el paquete para macOS (`.dmg`) o Linux (`.AppImage`) |
+| `npm run build:web` / `npm run dev:web` | Compila la app del celular / la abre con recarga en caliente |
 
 ### Generar el instalador
 
@@ -165,7 +176,8 @@ src/
 │   ├── pomodoro/
 │   └── habits/
 └── shared/          Código común (configuración, fechas, documentos de sincronización)
-server/              API de sincronización (Cloudflare Worker + D1), con sus pruebas
+server/              API de sincronización, celulares y recordatorios (Cloudflare Worker + D1), con sus pruebas
+web/                 App del celular (React, PWA); se compila en server/public
 ```
 
 ### Añadir un módulo

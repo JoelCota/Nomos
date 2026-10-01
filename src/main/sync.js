@@ -269,6 +269,11 @@ export function createSyncEngine({ loadState, saveState, getSyncables, encryptTo
       debounceTimer.unref?.()
     },
     syncNow: () => cycle(),
+    // Other owner-only API calls (linking phones...). Needs a connection.
+    call(method, path, body) {
+      if (!enabled()) throw new Error('Primero conecta Nomos con tu servidor.')
+      return request(method, path, body)
+    },
     status: publicStatus,
     async connect(rawUrl, rawToken) {
       const url = normalizeServerUrl(rawUrl)

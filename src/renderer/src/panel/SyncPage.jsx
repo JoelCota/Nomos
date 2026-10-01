@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import QRCode from 'qrcode'
 import { invoke, on } from '../lib/ipc'
 import { Button, Group, PageHeader, Row } from '../ui/controls'
 
@@ -36,6 +37,127 @@ function StateLine({ status, now }) {
       <span className={`h-2 w-2 shrink-0 rounded-full ${dot}`} aria-hidden />
       {text}
     </span>
+  )
+}
+
+
+const NOTIFY_LABEL = { always: 'Avisos: siempre', away: 'Avisos: si la PC está apagada', never: 'Sin avisos' }
+
+// Linked phones and the "link a phone" flow (code + QR to the phone app).
+function Phones({ now }) {
+  const [devices, setDevices] = useState(null)
+  const [pairing, setPairing] = useState(null) // { code, expiresAt, appUrl, qr }
+  const [error, setError] = useState(null)
+  const [justLinked, setJustLinked] = useState(null)
+
+  const load = async () => {
+    const r = await invoke('sync:devices')
+    if (r.ok) setDevices(r.data)
+    else setError(r.error)
+    return r.ok ? r.data : null
+  }
+  useEffect(() => {
+    load()
+  }, [])
+
+  // While a code is on screen, watch for the phone to appear.
+  useEffect(() => {
+    if (!pairing) return
+    const known = new Set((devices ?? []).map((d) => d.id))
+    const t = setInterval(async () => {
+      const list = await load()
+      const fresh = list?.find((d) => !known.has(d.id))
+      if (fresh) {
+        setPairing(null)
+        setJustLinked(fresh.name)
+      } else if (Date.now() > pairing.expiresAt) setPairing(null)
+    }, 3000)
+    return () => clearInterval(t)
+  }, [pairing])
+
+  const start = async () => {
+    setError(null)
+    setJustLinked(null)
+    const r = await invoke('sync:pair-start')
+    if (!r.ok) return setError(r.error)
+    const link = `${r.data.appUrl}/#pair=${r.data.code}`
+    const qr = await QRCode.toString(link, { type: 'svg', margin: 1, errorCorrectionLevel: 'M' })
+    setPairing({ ...r.data, link, qr })
+  }
+
+  const remove = async (d) => {
+    const r = await invoke('sync:device-remove', d.id)
+    if (r.ok) setDevices(r.data)
+    else setError(r.error)
+  }
+
+  const left = pairing ? Math.max(0, Math.ceil((pairing.expiresAt - now) / 60000)) : 0
+
+  return (
+    <>
+      <Group
+        title="Celulares"
+        footer="Cada celular tiene su propia llave. Al desvincularlo deja de tener acceso al instante; sus datos no se borran."
+      >
+        {devices === null && !error && <p className="px-4 py-3 text-[13px] text-fg-3">Cargando…</p>}
+        {devices?.length === 0 && <p className="px-4 py-3 text-[13px] text-fg-3">Ningún celular vinculado todavía.</p>}
+        {devices?.map((d) => (
+          <div key={d.id} data-testid="sync-device" className="flex items-center gap-3 px-4 py-2.5 text-[13px]">
+            <span aria-hidden className="text-[18px]">📱</span>
+            <div className="min-w-0 flex-1">
+              <p className="truncate">{d.name}</p>
+              <p className="text-[12px] text-fg-3">
+                {d.push ? NOTIFY_LABEL[d.notify] : 'Notificaciones sin activar'} ·{' '}
+                {d.lastSeen ? `visto ${ago(new Date(d.lastSeen).toISOString(), now)}` : 'aún no se conecta'}
+              </p>
+            </div>
+            <Button variant="plain" onClick={() => remove(d)}>
+              Desvincular
+            </Button>
+          </div>
+        ))}
+      </Group>
+
+      {justLinked && (
+        <p role="status" className="-mt-3 mb-4 px-1 text-[12px] text-break">
+          ¡Listo! «{justLinked}» quedó vinculado.
+        </p>
+      )}
+      {error && (
+        <p role="alert" className="-mt-3 mb-4 px-1 text-[12px] text-[#ef4444]">
+          {error}
+        </p>
+      )}
+
+      {pairing ? (
+        <section data-testid="sync-pairing" className="mb-6 flex gap-5 rounded-xl bg-group p-5">
+          <div
+            aria-label="Código QR para abrir la app en el celular"
+            role="img"
+            className="h-[148px] w-[148px] shrink-0 overflow-hidden rounded-lg bg-white p-1.5"
+            dangerouslySetInnerHTML={{ __html: pairing.qr }}
+          />
+          <div className="min-w-0 text-[13px] leading-relaxed">
+            <p className="text-[12px] text-fg-3">Tu código (vence en {left} min)</p>
+            <p data-testid="sync-pair-code" className="tnum mb-2 font-mono text-[26px] font-semibold tracking-wider">
+              {pairing.code}
+            </p>
+            <ol className="list-decimal space-y-0.5 pl-4 text-fg-2">
+              <li>Escanea el QR con la cámara del iPhone (o abre <span className="select-all text-fg">{pairing.appUrl.replace(/^https?:\/\//, '')}</span> en Safari).</li>
+              <li>En Safari: Compartir → «Agregar a pantalla de inicio».</li>
+              <li>Abre Nomos desde tu pantalla de inicio y escribe el código.</li>
+            </ol>
+            <Button className="mt-3" onClick={() => setPairing(null)}>
+              Cancelar
+            </Button>
+          </div>
+        </section>
+      ) : (
+        <Button data-testid="sync-pair" className="mb-6" onClick={start}>
+          Vincular un celular
+        </Button>
+      )}
+    </>
   )
 }
 
@@ -135,6 +257,8 @@ export default function SyncPage({ config }) {
               <StateLine status={status} now={now} />
             </Row>
           </Group>
+
+          <Phones now={now} />
 
           <Group title="Qué se sincroniza" footer="Solo los módulos activados. Los ajustes y el aspecto de los widgets se quedan en cada equipo.">
             {SYNCED.map((s) => {
