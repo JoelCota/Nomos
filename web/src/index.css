@@ -54,6 +54,24 @@ input {
   font-size: 17px; /* < 16px makes iOS zoom in */
 }
 
+/* App shell: the page itself never scrolls (so iOS can't move the tab bar);
+   only #scroller does. */
+.app-shell {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  height: 100dvh;
+}
+#scroller {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
 .tnum {
   font-variant-numeric: tabular-nums;
 }

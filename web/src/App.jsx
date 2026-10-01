@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { startSync, useStore } from './store'
-import { TabBar, isIOS, isStandalone } from './ui'
+import { TabBar, isIOS, isStandalone, scrollToTop } from './ui'
 import { Install, Pair, codeFromHash } from './screens/Pair'
 import Today from './screens/Today'
 import Tasks from './screens/Tasks'
@@ -22,7 +22,7 @@ export default function App() {
     if (st.token) startSync()
   }, [st.token])
   useEffect(() => {
-    window.scrollTo(0, 0)
+    scrollToTop()
   }, [tab])
 
   if (!st.token) {
@@ -31,10 +31,14 @@ export default function App() {
   }
 
   return (
-    <div className="mx-auto max-w-[560px] pb-[96px]">
-      {tab === 'today' && <Today />}
-      {tab === 'tasks' && <Tasks />}
-      {tab === 'settings' && <Settings />}
+    <div className="app-shell">
+      <main id="scroller">
+        <div className="mx-auto max-w-[560px] pb-6">
+          {tab === 'today' && <Today />}
+          {tab === 'tasks' && <Tasks />}
+          {tab === 'settings' && <Settings />}
+        </div>
+      </main>
       <TabBar tabs={TABS} value={tab} onChange={setTab} />
     </div>
   )

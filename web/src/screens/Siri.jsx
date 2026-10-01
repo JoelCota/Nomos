@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { api } from '../store'
-import { Button, Group } from '../ui'
+import { BackHeader, Button, Group } from '../ui'
 
 function Copy({ value, label, testId }) {
   const [done, setDone] = useState(false)
@@ -120,18 +120,7 @@ export default function Siri({ onBack }) {
 
   return (
     <>
-      <header className="pt-safe px-5 pb-2">
-        <div className="flex min-h-[28px] items-center">
-          <button type="button" onClick={onBack} className="press -ml-1 flex items-center text-[17px] text-accent">
-            <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden>
-              <path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-            Ajustes
-          </button>
-        </div>
-        <h1 className="text-[34px] font-bold leading-tight tracking-tight">Siri y Atajos</h1>
-        <p className="text-[15px] text-fg-3">Agrega tareas, marca hábitos o pregunta cómo vas, con la voz.</p>
-      </header>
+      <BackHeader back="Ajustes" onBack={onBack} title="Siri y Atajos" subtitle="Agrega tareas, marca hábitos o pregunta cómo vas, con la voz." />
 
       <Group
         title="1. Tu llave para Atajos"

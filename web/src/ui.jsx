@@ -14,6 +14,13 @@ export const deviceName = () => {
   return 'Navegador'
 }
 
+// The app scrolls inside #scroller (see App.jsx), not the page.
+export const scrollToTop = () => {
+  const el = document.getElementById('scroller')
+  if (el) el.scrollTop = 0
+  else window.scrollTo(0, 0)
+}
+
 export const haptic = () => {
   try {
     navigator.vibrate?.(8)
@@ -194,10 +201,7 @@ const ICONS = {
 
 export function TabBar({ tabs, value, onChange }) {
   return (
-    <nav
-      aria-label="Secciones"
-      className="pb-safe fixed inset-x-0 bottom-0 z-40 border-t border-line bg-[color-mix(in_srgb,var(--card)_86%,transparent)] backdrop-blur-xl"
-    >
+    <nav aria-label="Secciones" className="pb-safe relative z-40 shrink-0 border-t border-line bg-[color-mix(in_srgb,var(--card)_92%,transparent)] backdrop-blur-xl">
       <div className="mx-auto flex max-w-[560px]">
         {tabs.map((t) => (
           <button
@@ -226,5 +230,42 @@ export function Banner({ children, tone = 'muted' }) {
     >
       {children}
     </p>
+  )
+}
+
+// Header of a pushed screen: "‹ Back" on the left, an optional action on the right.
+export function BackHeader({ back, onBack, title, subtitle, action }) {
+  return (
+    <header className="pt-safe px-5 pb-2">
+      <div className="flex min-h-[28px] items-center justify-between">
+        <button type="button" onClick={onBack} className="press -ml-1 flex items-center text-[17px] text-accent">
+          <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden>
+            <path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          {back}
+        </button>
+        {action}
+      </div>
+      <h1 className="text-[34px] font-bold leading-tight tracking-tight">{title}</h1>
+      {subtitle && <p className="text-[15px] text-fg-3">{subtitle}</p>}
+    </header>
+  )
+}
+
+export function Stepper({ value, onChange, min, max, step = 1, label, format = (v) => v }) {
+  const set = (v) => onChange(Math.min(max, Math.max(min, v)))
+  return (
+    <div className="flex items-center gap-3">
+      <span className="tnum min-w-[96px] text-right text-[17px]">{format(value)}</span>
+      <div className="flex overflow-hidden rounded-[9px] bg-fill">
+        <button type="button" aria-label={`Menos ${label}`} disabled={value <= min} onClick={() => set(value - step)} className="press px-3.5 py-1.5 text-[20px] leading-none disabled:opacity-30">
+          −
+        </button>
+        <span className="my-1.5 w-px bg-line" aria-hidden />
+        <button type="button" aria-label={`Más ${label}`} disabled={value >= max} onClick={() => set(value + step)} className="press px-3.5 py-1.5 text-[20px] leading-none disabled:opacity-30">
+          +
+        </button>
+      </div>
+    </div>
   )
 }

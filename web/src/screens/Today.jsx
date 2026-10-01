@@ -2,7 +2,9 @@ import { useMemo, useState } from 'react'
 import { addDays, dayItems, perfectStreak, progressText, recentDays, streak, streakText, todayKey } from '../../../src/modules/habits/logic.js'
 import { LOCALE } from '../../../src/shared/time.js'
 import { selectHabitSettings, selectHabits, selectLog, useStore, write } from '../store'
-import { Banner, Header, Ring, Segmented, Sheet, haptic } from '../ui'
+import { Banner, Header, Ring, Segmented, Sheet, haptic, scrollToTop } from '../ui'
+import HabitEditor from './HabitEditor'
+import HabitsList from './HabitsList'
 
 const MAX_VALUE = 100000
 
@@ -109,6 +111,12 @@ export default function Today() {
   const st = useStore()
   const [which, setWhich] = useState('today')
   const [sheet, setSheet] = useState(null)
+  // Pushed screens: { kind: 'list' } | { kind: 'edit', id, from } | { kind: 'new', from }
+  const [screen, setScreenRaw] = useState(null)
+  const setScreen = (s) => {
+    setScreenRaw(s)
+    scrollToTop()
+  }
 
   const { habits, log, settings } = useMemo(
     () => ({ habits: selectHabits(st.docs), log: selectLog(st.docs), settings: selectHabitSettings(st.docs) }),
@@ -122,9 +130,25 @@ export default function Today() {
   const rawDate = new Date(`${day}T12:00:00`).toLocaleDateString(LOCALE, { weekday: 'long', day: 'numeric', month: 'long' })
   const dateText = rawDate.charAt(0).toUpperCase() + rawDate.slice(1)
 
+  if (screen?.kind === 'list') {
+    return <HabitsList onBack={() => setScreen(null)} onEdit={(id) => setScreen({ kind: 'edit', id, from: 'list' })} onNew={() => setScreen({ kind: 'new', from: 'list' })} />
+  }
+  if (screen?.kind === 'edit' || screen?.kind === 'new') {
+    const back = () => setScreen(screen.from === 'list' ? { kind: 'list' } : null)
+    return <HabitEditor key={screen.id ?? 'new'} habitId={screen.kind === 'edit' ? screen.id : null} onClose={back} />
+  }
+
   return (
     <>
-      <Header title={which === 'today' ? 'Hoy' : 'Ayer'} subtitle={dateText} />
+      <Header
+        title={which === 'today' ? 'Hoy' : 'Ayer'}
+        subtitle={dateText}
+        right={
+          <button type="button" data-testid="new-habit" aria-label="Nuevo hábito" onClick={() => setScreen({ kind: 'new' })} className="press -mr-1 px-1 text-[30px] font-light leading-none text-accent">
+            +
+          </button>
+        }
+      />
       {!st.online && <Banner>Sin conexión. Tus cambios se enviarán al volver.</Banner>}
       <div className="mx-4 mb-5">
         <Segmented
@@ -140,7 +164,12 @@ export default function Today() {
 
       {habits.length === 0 ? (
         <p className="mx-6 mt-10 text-center text-[16px] text-fg-3">
-          {st.seq === 0 && st.syncing ? 'Cargando tus hábitos…' : 'Todavía no tienes hábitos. Créalos en Nomos en tu PC y aparecerán aquí.'}
+          {st.seq === 0 && st.syncing ? 'Cargando tus hábitos…' : 'Todavía no tienes hábitos.'}
+          {!(st.seq === 0 && st.syncing) && (
+            <button type="button" onClick={() => setScreen({ kind: 'new' })} className="press mt-4 block w-full rounded-[12px] bg-accent py-3 text-[17px] font-semibold text-white">
+              Crear mi primer hábito
+            </button>
+          )}
         </p>
       ) : (
         <>
@@ -164,6 +193,15 @@ export default function Today() {
               ))}
             </div>
           )}
+          <button type="button" data-testid="all-habits" onClick={() => setScreen({ kind: 'list' })} className="press mx-4 mb-6 flex w-[calc(100%-2rem)] items-center justify-between rounded-[14px] bg-card px-4 py-3 text-[17px]">
+            <span>Mis hábitos</span>
+            <span className="flex items-center gap-1 text-[15px] text-fg-3">
+              {habits.length}
+              <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden>
+                <path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </span>
+          </button>
         </>
       )}
 
@@ -171,7 +209,10 @@ export default function Today() {
         <Sheet
           title={`${sheet.habit.icon} ${sheet.habit.name}`}
           subtitle={progressText(sheet) || (sheet.value > 0 ? 'Hecho' : 'Pendiente')}
-          actions={sheetActions(dayItems([sheet.habit], log, day)[0] ?? sheet, day)}
+          actions={[
+            ...sheetActions(dayItems([sheet.habit], log, day)[0] ?? sheet, day),
+            { label: 'Editar hábito', onClick: () => setScreen({ kind: 'edit', id: sheet.habit.id }) }
+          ]}
           onClose={() => setSheet(null)}
         />
       )}

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, syncNow, unlink, useStore } from '../store'
 import { disablePush, enablePush, pushStatus } from '../push'
-import { Group, Header, Row, Segmented, Sheet } from '../ui'
+import { Group, Header, Row, Segmented, Sheet, scrollToTop } from '../ui'
 import Siri from './Siri'
 
 const NOTIFY = [
@@ -57,7 +57,7 @@ export default function Settings() {
       setDevice(r.device)
     })
 
-  if (siri) return <Siri onBack={() => (setSiri(false), window.scrollTo(0, 0))} />
+  if (siri) return <Siri onBack={() => (setSiri(false), scrollToTop())} />
 
   return (
     <>
@@ -118,7 +118,7 @@ export default function Settings() {
       )}
 
       <Group title="Siri y Atajos" footer="Agrega tareas, marca hábitos o pregunta cómo vas, con la voz.">
-        <Row onClick={() => (setSiri(true), window.scrollTo(0, 0))} data-testid="open-siri">
+        <Row onClick={() => (setSiri(true), scrollToTop())} data-testid="open-siri">
           <span className="flex-1">Configurar Siri</span>
           <svg width="14" height="14" viewBox="0 0 24 24" className="text-fg-3" aria-hidden>
             <path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />

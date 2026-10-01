@@ -99,6 +99,7 @@ Puedes publicar tu propio servidor de Nomos en Cloudflare: es gratis para uso pe
 El mismo servidor sirve una **app para el iPhone** (o cualquier celular), sin App Store: se abre en Safari y se agrega a la pantalla de inicio.
 
 - **Hoy:** tus hábitos con su anillo de progreso, rachas y la última semana. Un toque marca un hábito, suma 1 o suma 5 minutos; también puedes corregir ayer.
+- **Mis hábitos:** crea, edita, reordena y elimina hábitos desde el celular (tipo, meta, días y recordatorios), sin prender la PC.
 - **Tareas:** agrega, completa y borra tareas. Aparecen en el Pomodoro de tu PC.
 - **Recordatorios:** las horas de tus hábitos y el resumen de la noche llegan como notificaciones, aunque la PC esté apagada. Puedes elegir que te avisen siempre, solo con la PC apagada o nunca.
 - **Siri:** con la app Atajos del iPhone puedes decir «Oye Siri, nueva tarea», «marcar hábito» o «cómo voy». La app te guía para armarlos (Ajustes → Siri y Atajos).
