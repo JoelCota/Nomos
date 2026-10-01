@@ -55,6 +55,7 @@ Nomos pone en el escritorio tarjetas pequeñas, como los widgets de macOS. Cada 
   - su **opacidad**.
 - **Apariencia:** tema claro, oscuro o del sistema; ocho colores de acento; y fondo **de vidrio** (experimental, solo Windows 11 22H2 o posterior).
 - **Inicio:** abrir Nomos al iniciar Windows y *click-through*, que hace que los clics atraviesen los widgets.
+- **Sincronización** (opcional): conecta Nomos a tu propio servidor para usar tus hábitos y tareas desde otros dispositivos.
 
 También puedes hacer clic derecho sobre cualquier widget para cambiar estas opciones.
 
@@ -82,7 +83,16 @@ Nomos queda en la bandeja del sistema:
 
 ## Tus datos
 
-Todo se guarda en tu equipo, en `%APPDATA%\Nomos\nomos.json`. Nomos no usa internet ni cuentas.
+Todo se guarda en tu equipo, en `%APPDATA%\Nomos\nomos.json`. Nomos no usa internet ni cuentas, salvo que actives la sincronización.
+
+### Sincronización (opcional)
+
+Puedes publicar tu propio servidor de Nomos en Cloudflare: es gratis para uso personal y toma unos 10 minutos (guía en [`server/README.md`](server/README.md)). Luego lo conectas en **Panel → Sincronización** con su dirección y su token.
+
+- Se sincronizan tus hábitos, su registro diario, tus tareas y el historial del Pomodoro. Los ajustes y el aspecto de los widgets se quedan en cada equipo.
+- Los cambios se envían al momento y los de otros dispositivos llegan en menos de 30 segundos. Sin internet, Nomos sigue funcionando y sincroniza al volver.
+- Si el mismo dato cambia en dos sitios, gana el cambio más reciente.
+- El token se guarda cifrado con el sistema de Windows. Tus datos viven en tu cuenta de Cloudflare, no en la de terceros.
 
 Si usabas la versión anterior (*Pomodoro Widget*), en el primer arranque Nomos copia tus ajustes, tareas e historial. El archivo antiguo se conserva como respaldo.
 
@@ -134,6 +144,7 @@ Los resultados se escriben en `%TEMP%\nomos-selftest\debug.log`. Variables opcio
 | `NOMOS_TOAST_MS=2500` | Acorta lo que duran las tarjetas de aviso |
 | `NOMOS_FAKE_GLASS=1` | Simula que el equipo soporta el fondo de vidrio |
 | `NOMOS_SEPARATE_WINDOWS=1` | Usa un proceso por ventana en vez del proceso compartido (también sirve como plan B fuera del test) |
+| `NOMOS_TEST_SYNC_URL` / `NOMOS_TEST_SYNC_TOKEN` | Añade las pruebas de sincronización contra un servidor local (`node server/test/local-server.js 8799 token`) |
 
 ### Estructura
 
@@ -145,6 +156,7 @@ src/
 │   ├── toasts.js    Tarjetas de aviso
 │   ├── host.js      Proceso de renderizado compartido
 │   ├── native.js    Funciones de Windows (capa «Al fondo», vidrio) vía koffi
+│   ├── sync.js      Motor de sincronización con el servidor
 │   └── store.js     Configuración y migraciones
 ├── preload/         Puente IPC seguro
 ├── renderer/        Interfaz en React (widgets, Panel, tarjetas)
@@ -152,7 +164,8 @@ src/
 │   ├── clock/
 │   ├── pomodoro/
 │   └── habits/
-└── shared/          Código común (configuración, fechas)
+└── shared/          Código común (configuración, fechas, documentos de sincronización)
+server/              API de sincronización (Cloudflare Worker + D1), con sus pruebas
 ```
 
 ### Añadir un módulo
@@ -165,6 +178,7 @@ src/
    - mostrar tarjetas y notificaciones;
    - reproducir sonidos;
    - hablar con otros módulos.
+4. Para que sus datos se sincronicen, el servicio expone `sync: { collections, exportDocs(), importDocs(changes) }`. Las funciones de `src/shared/syncDocs.js` convierten listas y registros en documentos y de vuelta.
 
 El Panel, la bandeja, el menú contextual y la persistencia lo recogen solos.
 

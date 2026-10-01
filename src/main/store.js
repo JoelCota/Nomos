@@ -101,3 +101,8 @@ export const setModule = (id, patch) => {
 export const getData = (moduleId, key, fallback) => getStore().get(`data.${moduleId}.${key}`, fallback)
 export const setData = (moduleId, key, value) => getStore().set(`data.${moduleId}.${key}`, value)
 export const hasStoreKey = (key) => getStore().has(key)
+
+// Sync engine state (server, token, what was last synced). Kept apart from the
+// config so it never reaches the renderer.
+export const getSyncState = () => getStore().get('sync', null)
+export const setSyncState = (value) => getStore().set('sync', value)

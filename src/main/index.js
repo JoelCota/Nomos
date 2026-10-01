@@ -1,11 +1,12 @@
-import { app, BrowserWindow, Tray, Menu, ipcMain, Notification, globalShortcut, nativeTheme } from 'electron'
+import { app, BrowserWindow, Tray, Menu, ipcMain, Notification, globalShortcut, nativeTheme, safeStorage, powerMonitor } from 'electron'
 import { join } from 'path'
 import { mkdirSync, rmSync, writeFileSync } from 'fs'
 import { MANIFESTS, getManifest } from '../modules/manifests.js'
 import { SERVICES } from '../modules/registry.main.js'
 import { GENERAL_DEFAULTS, LAYER_LABELS, SIZE_LABELS, WIDGET_PAD, glassActive } from '../shared/config.js'
 import { initNative, setGlassDarkMode, supports } from './native.js'
-import { getConfig, setGeneral, setModule, getData, setData } from './store.js'
+import { getConfig, setGeneral, setModule, getData, setData, getSyncState, setSyncState } from './store.js'
+import { createSyncEngine } from './sync.js'
 import { createWidgetManager } from './widgets.js'
 import { createToastManager } from './toasts.js'
 import { createWindowHost } from './host.js'
@@ -104,6 +105,7 @@ function commit(prev) {
     if (now && !was) {
       svc?.start()
       registerModuleShortcuts(m.id)
+      if (prev) syncEngine?.localChanged()
     } else if (!now && was) {
       svc?.stop()
       unregisterModuleShortcuts(m.id)
@@ -189,7 +191,10 @@ function createServiceContext(id) {
     getSettings: () => config.modules[id].settings,
     data: {
       get: (key, fallback) => getData(id, key, fallback),
-      set: (key, value) => setData(id, key, value)
+      set: (key, value) => {
+        setData(id, key, value)
+        syncEngine?.localChanged()
+      }
     },
     handle: (name, fn) => ipcMain.handle(`${id}:${name}`, (_e, ...args) => fn(...args)),
     broadcast: (event, payload) => sendToAll(`${id}:${event}`, payload),
@@ -355,6 +360,13 @@ function createTray() {
 
 function registerIpc() {
   ipcMain.handle('config:get', () => config)
+  ipcMain.handle('sync:status', () => syncEngine.status())
+  ipcMain.handle('sync:connect', (_e, url, token) => syncCall(() => syncEngine.connect(url, token))())
+  ipcMain.handle('sync:disconnect', () => syncEngine.disconnect())
+  ipcMain.handle('sync:now', syncCall(async () => {
+    await syncEngine.syncNow()
+    return syncEngine.status()
+  }))
   ipcMain.handle('config:set-general', (_e, patch) => {
     updateGeneral(cleanGeneral(patch))
     return config
@@ -401,6 +413,45 @@ function registerGlobalShortcuts() {
 function quitApp() {
   isQuitting = true
   app.quit()
+}
+
+// ---------------------------------------------------------------------------
+// Sync with the Nomos server (optional; see server/)
+
+let syncEngine = null
+
+// The token is encrypted with the OS (DPAPI on Windows) when possible.
+const encryptToken = (t) =>
+  safeStorage.isEncryptionAvailable() ? { v: 'enc', d: safeStorage.encryptString(t).toString('base64') } : { v: 'plain', d: t }
+const decryptToken = (stored) => {
+  try {
+    return stored?.v === 'enc' ? safeStorage.decryptString(Buffer.from(stored.d, 'base64')) : stored?.d ?? ''
+  } catch {
+    return ''
+  }
+}
+
+function createSync() {
+  syncEngine = createSyncEngine({
+    loadState: getSyncState,
+    saveState: setSyncState,
+    // Only enabled modules sync; a module switched on later catches up.
+    getSyncables: () => MANIFESTS.filter((m) => config.modules[m.id].enabled).map((m) => services.get(m.id)?.sync),
+    encryptToken,
+    decryptToken,
+    broadcast: (status) => sendToAll('sync:status', status),
+    log
+  })
+  powerMonitor.on('resume', () => syncEngine.syncNow())
+}
+
+// Errors go back as { ok: false, error } so the Panel can show the message as is.
+const syncCall = (fn) => async () => {
+  try {
+    return { ok: true, status: await fn() }
+  } catch (err) {
+    return { ok: false, error: err.message, status: syncEngine.status() }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -463,10 +514,12 @@ if (!hasLock) {
       if (factory) services.set(m.id, factory(createServiceContext(m.id)))
     }
 
+    createSync()
     registerIpc()
     createTray()
     registerGlobalShortcuts()
     commit(null)
+    syncEngine.start()
 
     if (config.general.launchAtLogin) app.setLoginItemSettings({ openAtLogin: true })
 
@@ -484,6 +537,7 @@ if (!hasLock) {
           services,
           showPanel,
           getPanel,
+          sync: syncEngine,
           log
         })
       } catch (err) {
@@ -506,6 +560,7 @@ if (!hasLock) {
   })
 
   app.on('will-quit', () => {
+    syncEngine?.stop()
     globalShortcut.unregisterAll()
   })
 }

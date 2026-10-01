@@ -1,6 +1,7 @@
 // Pomodoro service — runs in the main process so the timer keeps going while the
 // widget is hidden. Windows only render the state broadcast on `pomodoro:state`.
 import { formatTime, isToday } from '../../shared/time.js'
+import { applyListDocs, groupByCollection, listToDocs } from '../../shared/syncDocs.js'
 
 const TICK_MS = 250
 const PHASE_LABELS = { work: 'Foco', short: 'Descanso corto', long: 'Descanso largo' }
@@ -291,6 +292,18 @@ export default function createPomodoroService(ctx) {
     // Used by other modules through ctx.getService('pomodoro').
     api: {
       isFocusing: () => state.phase === 'work' && state.running
+    },
+    // Sync with the Nomos server: tasks (in order) and finished focus sessions.
+    sync: {
+      collections: ['tasks', 'focusSessions'],
+      exportDocs: () => ({ tasks: listToDocs(tasks(), { order: true }), focusSessions: listToDocs(history()) }),
+      importDocs(changes) {
+        const g = groupByCollection(changes)
+        if (g.tasks) ctx.data.set('tasks', applyListDocs(tasks(), g.tasks, { order: true }))
+        if (g.focusSessions) ctx.data.set('history', applyListDocs(history(), g.focusSessions, { sortBy: (h) => h.completedAt ?? '' }))
+        broadcastData()
+        emit()
+      }
     },
     // For the self-test.
     debug: { snapshot, toggle, start, pause, reset, selectTask, setRemaining, switchPhase }

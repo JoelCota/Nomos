@@ -6,6 +6,7 @@ import ModulesPage from './ModulesPage'
 import ModulePage from './ModulePage'
 import AppearancePage from './AppearancePage'
 import StartupPage from './StartupPage'
+import SyncPage from './SyncPage'
 import logoUrl from '../assets/nomos-glyph.svg'
 
 function NavItem({ active, onClick, icon, children, status }) {
@@ -53,6 +54,7 @@ export default function PanelApp({ initialPage }) {
   if (moduleId && getManifest(moduleId)) content = <ModulePage id={moduleId} config={config} />
   else if (page === 'appearance') content = <AppearancePage config={config} />
   else if (page === 'startup') content = <StartupPage config={config} />
+  else if (page === 'sync') content = <SyncPage config={config} />
   else content = <ModulesPage config={config} onOpen={(id) => setPage(`module:${id}`)} />
 
   return (
@@ -90,6 +92,9 @@ export default function PanelApp({ initialPage }) {
           </NavItem>
           <NavItem active={page === 'startup'} onClick={() => setPage('startup')} icon="⌘">
             Inicio y atajos
+          </NavItem>
+          <NavItem active={page === 'sync'} onClick={() => setPage('sync')} icon="⇅">
+            Sincronización
           </NavItem>
         </div>
       </nav>
