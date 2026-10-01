@@ -36,7 +36,7 @@ export function zonedNow(now, tz) {
 
 const docData = (r) => JSON.parse(r.data)
 
-async function loadHabits(db, habitDay) {
+export async function loadHabits(db, habitDay) {
   const { results: hs } = await db.prepare(`SELECT id, data FROM docs WHERE collection = 'habits' AND deleted = 0`).all()
   const habits = hs
     .map((r) => ({ ...docData(r), id: r.id }))

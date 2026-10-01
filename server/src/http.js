@@ -12,7 +12,8 @@ export const json = (body, status = 200) =>
     headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...CORS }
   })
 
-export const fail = (status, error) => json({ ok: false, error }, status)
+// `message` repeats the error so a Siri shortcut can show/speak it as is.
+export const fail = (status, error) => json({ ok: false, error, message: error }, status)
 
 export class HttpError extends Error {
   constructor(status, message) {

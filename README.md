@@ -101,6 +101,7 @@ El mismo servidor sirve una **app para el iPhone** (o cualquier celular), sin Ap
 - **Hoy:** tus hábitos con su anillo de progreso, rachas y la última semana. Un toque marca un hábito, suma 1 o suma 5 minutos; también puedes corregir ayer.
 - **Tareas:** agrega, completa y borra tareas. Aparecen en el Pomodoro de tu PC.
 - **Recordatorios:** las horas de tus hábitos y el resumen de la noche llegan como notificaciones, aunque la PC esté apagada. Puedes elegir que te avisen siempre, solo con la PC apagada o nunca.
+- **Siri:** con la app Atajos del iPhone puedes decir «Oye Siri, nueva tarea», «marcar hábito» o «cómo voy». La app te guía para armarlos (Ajustes → Siri y Atajos).
 
 Para vincularla: **Panel → Sincronización → Vincular un celular** y sigue los pasos (código o QR). Cada celular tiene su propia llave y se desvincula desde ahí. Guía completa en [`server/README.md`](server/README.md#la-app-del-celular).
 

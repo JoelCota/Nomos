@@ -11,6 +11,7 @@ import { authenticate, touch } from './auth.js'
 import { currentSeq, pull, push } from './docs.js'
 import { pushToDevices, vapidKeys } from './webpush.js'
 import { runReminders } from './reminders.js'
+import { quickHabit, quickTask, quickToday } from './quick.js'
 
 const VERSION = 2
 const PAIR_TTL_MS = 10 * 60 * 1000
@@ -72,6 +73,19 @@ async function pairClaim(db, body) {
     .bind(device.id, device.name, await sha256Hex(token), device.created_at)
     .run()
   return { ok: true, token, device: publicDevice({ ...device, notify: 'always', last_seen: null }) }
+}
+
+// A separate key for iOS Shortcuts (Siri), created from the phone app. It shows
+// up in the PC's list of devices and can be unlinked like a phone.
+async function shortcutKey(db, phone) {
+  const token = randomToken()
+  const id = crypto.randomUUID()
+  const name = `Atajos de Siri (${phone.name})`.slice(0, 40)
+  await db
+    .prepare(`INSERT INTO devices (id, name, token_hash, notify, created_at) VALUES (?1, ?2, ?3, 'never', ?4)`)
+    .bind(id, name, await sha256Hex(token), Date.now())
+    .run()
+  return { ok: true, token, device: { id, name } }
 }
 
 async function listDevices(db) {
@@ -185,6 +199,17 @@ async function route(request, env) {
     deviceOnly(who)
     return json(await removeDevice(db, who.device.id))
   }
+
+  if (pathname === '/api/device/shortcut-key' && method === 'POST') {
+    deviceOnly(who)
+    return json(await shortcutKey(db, who.device))
+  }
+
+  // Siri / Atajos
+  const writer = who.role === 'device' ? `phone:${who.device.id}` : 'pc'
+  if (pathname === '/api/quick/task' && method === 'POST') return json(await quickTask(db, await readJson(request), writer))
+  if (pathname === '/api/quick/habit' && method === 'POST') return json(await quickHabit(db, await readJson(request), writer))
+  if (pathname === '/api/quick/today' && method === 'GET') return json(await quickToday(db))
 
   // Notifications
   if (pathname === '/api/push/key' && method === 'GET') return json({ ok: true, publicKey: (await vapidKeys(db)).publicKey })

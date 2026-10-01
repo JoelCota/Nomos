@@ -91,6 +91,16 @@ En iPhone, las notificaciones web necesitan iOS 16.4 o posterior y que la app es
 
 Los recordatorios usan las horas que configuras en Nomos en tu PC (cada hábito, el resumen de la noche y la hora de inicio del día) y la zona horaria de la PC.
 
+### Siri y Atajos
+
+En la app del celular: **Ajustes → Siri y Atajos**. Ahí creas una llave solo para tus atajos y ves, paso a paso, cómo armar tres atajos en la app **Atajos** del iPhone:
+
+- **Nueva tarea:** «Oye Siri, nueva tarea» → «¿Qué tarea?» → la agrega a tus tareas.
+- **Marcar hábito:** «Oye Siri, marcar hábito» → «¿Qué hábito?» → lo marca, o suma 1 o 5 minutos. No importan los acentos ni las mayúsculas, y basta con una parte del nombre.
+- **Cómo voy:** «Oye Siri, cómo voy» → «Llevas 2 de 5 hábitos. Te faltan: …».
+
+La llave de Atajos aparece en tu PC como «Atajos de Siri (…)» y se desvincula igual que un celular.
+
 ### Si pierdes un celular
 
 En **Panel → Sincronización**, pulsa **Desvincular** junto a ese celular. Su llave deja de funcionar al instante.
@@ -124,6 +134,10 @@ Las rutas piden la cabecera `Authorization: Bearer <token>`, salvo `/api/health`
 | `GET /api/push/key` | PC o celular | Llave pública VAPID |
 | `POST` · `DELETE /api/push/subscribe` | celular | Activa o quita las notificaciones de este celular |
 | `POST /api/push/test` | celular | Manda una notificación de prueba |
+| `POST /api/device/shortcut-key` | celular | Crea una llave aparte para Atajos de Siri |
+| `POST /api/quick/task` | PC o celular | `{ title }` → agrega una tarea; responde `{ message }` para que Siri lo diga |
+| `POST /api/quick/habit` | PC o celular | `{ habit, amount? }` → marca un hábito o le suma |
+| `GET /api/quick/today` | PC o celular | Resumen del día en una frase |
 
 ## Desarrollo
 

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { api, syncNow, unlink, useStore } from '../store'
 import { disablePush, enablePush, pushStatus } from '../push'
 import { Group, Header, Row, Segmented, Sheet } from '../ui'
+import Siri from './Siri'
 
 const NOTIFY = [
   { value: 'always', label: 'Siempre' },
@@ -25,6 +26,7 @@ export default function Settings() {
   const [msg, setMsg] = useState(null)
   const [confirm, setConfirm] = useState(false)
   const [now, setNow] = useState(Date.now())
+  const [siri, setSiri] = useState(false)
 
   useEffect(() => {
     pushStatus().then(setPush)
@@ -54,6 +56,8 @@ export default function Settings() {
       const r = await api('PATCH', '/api/device', { notify })
       setDevice(r.device)
     })
+
+  if (siri) return <Siri onBack={() => (setSiri(false), window.scrollTo(0, 0))} />
 
   return (
     <>
@@ -112,6 +116,15 @@ export default function Settings() {
           {msg.text}
         </p>
       )}
+
+      <Group title="Siri y Atajos" footer="Agrega tareas, marca hábitos o pregunta cómo vas, con la voz.">
+        <Row onClick={() => (setSiri(true), window.scrollTo(0, 0))} data-testid="open-siri">
+          <span className="flex-1">Configurar Siri</span>
+          <svg width="14" height="14" viewBox="0 0 24 24" className="text-fg-3" aria-hidden>
+            <path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </Row>
+      </Group>
 
       <Group title="Sincronización">
         <Row>
