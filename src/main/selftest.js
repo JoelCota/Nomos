@@ -320,6 +320,20 @@ export async function runSelfTest({ getConfig, updateModule, updateGeneral, togg
   const panel = getPanel()
   check('panel abre', !!(await js(panel, `!!document.querySelector('[data-testid="panel"]')`)))
   check('el Panel va en su propio proceso (se libera al cerrarlo)', panel && pidOf(panel) !== hostPid)
+  check(
+    'el logo de Nomos carga en el Panel',
+    !!(await js(
+      panel,
+      `new Promise((r) => { const u = getComputedStyle(document.querySelector('nav [aria-hidden]')).webkitMaskImage.match(/url\\("?([^")]+)/)?.[1]; if (!u) return r(false); const i = new Image(); i.onload = () => r(i.naturalWidth > 0); i.onerror = () => r(false); i.src = u })`
+    ))
+  )
+  {
+    const { trayImage, iconPngPath, windowIconPath } = await import('./appIcon.js')
+    const dark = trayImage(false)
+    const light = trayImage(true)
+    check('íconos de bandeja (claro y oscuro) cargan', !dark.isEmpty() && !light.isEmpty() && dark.getSize().width === 16, JSON.stringify(dark.getSize()))
+    check('ícono de la app encontrado', !!iconPngPath() && !!windowIconPath())
+  }
   await js(panel, `document.querySelector('[data-testid="module-toggle-clock"]')?.click(); true`)
   await sleep(700)
   check('interruptor del panel desactiva el reloj', getConfig().modules.clock.enabled === false)
