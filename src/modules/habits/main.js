@@ -4,6 +4,7 @@
 import { addDays, dayItems, dayProgress, normalizeHabit, todayKey } from './logic.js'
 import { SNOOZE_MIN, collectDue } from './reminders.js'
 import { dayKey } from '../../shared/time.js'
+import { applyListDocs, applyLogDocs, groupByCollection, listToDocs, logToDocs } from '../../shared/syncDocs.js'
 
 export default function createHabitsService(ctx) {
   const habits = () => ctx.data.get('habits', [])
@@ -266,6 +267,42 @@ export default function createHabitsService(ctx) {
       addMinutes: (id, minutes) => {
         const h = find(id)
         if (h?.type === 'duration') increment(id, minutes)
+      }
+    },
+    // Sync with the Nomos server: one document per habit and per day/habit cell.
+    sync: {
+      // habitSettings/main tells the server (phone reminders) and the phone app
+      // when the day starts, the summary time and this PC's time zone. The PC is
+      // its only source, so incoming copies are ignored.
+      collections: ['habits', 'habitLog', 'habitSettings'],
+      exportDocs: () => {
+        const s = ctx.getSettings()
+        return {
+          habits: listToDocs(habits(), { order: true }),
+          habitLog: logToDocs(log()),
+          habitSettings: {
+            main: {
+              dayStartHour: s.dayStartHour ?? 0,
+              remindersEnabled: s.remindersEnabled !== false,
+              summaryEnabled: !!s.summaryEnabled,
+              summaryTime: s.summaryTime ?? '20:30',
+              tz: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+            }
+          }
+        }
+      },
+      importDocs(changes) {
+        const g = groupByCollection(changes)
+        if (g.habits) {
+          const list = applyListDocs(habits(), g.habits, {
+            order: true,
+            normalize: (data, id) => normalizeHabit({ ...data, id }),
+            onSkip: (ch, err) => ctx.log(`[habits] synced habit ${ch.id} skipped: ${err.message}`)
+          })
+          ctx.data.set('habits', list)
+        }
+        if (g.habitLog) ctx.data.set('log', applyLogDocs(log(), g.habitLog))
+        emit()
       }
     },
     // For the self-test.

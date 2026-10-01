@@ -6,7 +6,7 @@ import { getAdoptedFrom, getData, hasStoreKey } from './store.js'
 import { TOAST_MS } from './views.js'
 import { WIDGET_PAD, widgetWindowSize } from '../shared/config.js'
 
-export async function runSelfTest({ getConfig, updateModule, updateGeneral, toggleAllWidgets, widgets, toasts, windowHost, services, showPanel, getPanel, log }) {
+export async function runSelfTest({ getConfig, updateModule, updateGeneral, toggleAllWidgets, widgets, toasts, windowHost, services, showPanel, getPanel, sync, log }) {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
   const results = []
   const check = (name, cond, detail = '') => {
@@ -340,6 +340,107 @@ export async function runSelfTest({ getConfig, updateModule, updateGeneral, togg
   await js(panel, `document.querySelector('[data-testid="module-toggle-clock"]')?.click(); true`)
   await sleep(2500)
   check('interruptor del panel reactiva el reloj', getConfig().modules.clock.enabled === true && !!widgets.get('clock'))
+
+  // ---- Sync (only when a local server is given: NOMOS_TEST_SYNC_URL / _TOKEN) ----
+  const syncUrl = process.env.NOMOS_TEST_SYNC_URL
+  const syncToken = process.env.NOMOS_TEST_SYNC_TOKEN
+  if (syncUrl && syncToken) {
+    const api = async (method, path, body) => {
+      const res = await fetch(`${syncUrl}${path}`, {
+        method,
+        headers: { Authorization: `Bearer ${syncToken}`, 'Content-Type': 'application/json' },
+        body: body ? JSON.stringify(body) : undefined
+      })
+      return res.json()
+    }
+    const typeInto = (testId, value) =>
+      js(
+        panel,
+        `(() => { const el = document.querySelector('[data-testid="${testId}"]'); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(el, ${JSON.stringify(value)}); el.dispatchEvent(new Event('input', { bubbles: true })); return true })()`
+      )
+    panel.webContents.send('panel:navigate', 'sync')
+    await sleep(600)
+    check('página de sincronización en el Panel', !!(await js(panel, `!!document.querySelector('[data-testid="sync-url"]')`)))
+
+    await typeInto('sync-url', syncUrl)
+    await typeInto('sync-token', 'token-equivocado')
+    await sleep(200)
+    await js(panel, `document.querySelector('[data-testid="sync-connect"]').click(); true`)
+    await sleep(1500)
+    const wrong = await js(panel, `document.querySelector('[data-testid="sync-error"]')?.textContent ?? ''`)
+    check('token equivocado: el Panel muestra el error', /Token incorrecto/.test(wrong), wrong)
+
+    await typeInto('sync-token', syncToken)
+    await sleep(200)
+    await js(panel, `document.querySelector('[data-testid="sync-connect"]').click(); true`)
+    await sleep(3000)
+    const st = await js(panel, `document.querySelector('[data-testid="sync-state"]')?.dataset.state ?? ''`)
+    check('conecta con el servidor y sincroniza', st === 'ok' && sync.status().state === 'ok', `${st} ${JSON.stringify(sync.status())}`)
+
+    const hbs = services.get('habits').debug
+    const remote1 = await api('GET', '/api/sync?since=0')
+    const names = remote1.docs.filter((d) => d.collection === 'habits' && !d.deleted).map((d) => d.data.name)
+    check('los hábitos locales subieron al servidor', names.length === hbs.payload().habits.length && names.includes('Leer'), names.join(', '))
+    check('las tareas subieron al servidor', remote1.docs.some((d) => d.collection === 'tasks'))
+
+    // A local change goes up by itself (debounced).
+    hbs.create({ name: 'Desde la PC', icon: '💻', type: 'check', frequency: { kind: 'daily' } })
+    await sleep(3500)
+    const remote2 = await api('GET', `/api/sync?since=${remote1.seq}`)
+    check('un hábito nuevo se sube solo', remote2.docs.some((d) => d.collection === 'habits' && d.data?.name === 'Desde la PC'))
+
+    // The "phone" marks it done and adds a task.
+    const created = hbs.payload().habits.find((h) => h.name === 'Desde la PC')
+    const today = hbs.today()
+    await api('POST', '/api/sync', {
+      device: 'phone',
+      changes: [
+        { collection: 'habitLog', id: `${today}|${created.id}`, data: { day: today, habitId: created.id, value: 1 }, updatedAt: Date.now() },
+        { collection: 'tasks', id: 'from-phone', data: { title: 'Tarea desde el celular', done: false, pomodoros: 0, order: 99 }, updatedAt: Date.now() }
+      ]
+    })
+    await js(panel, `document.querySelector('[data-testid="sync-now"]').click(); true`)
+    await sleep(2500)
+    check('lo marcado en el celular llega a la PC', hbs.payload().log[today]?.[created.id] === 1)
+    const tasks = services.get('pomodoro').sync.exportDocs().tasks
+    check('la tarea del celular llega a la PC', tasks['from-phone']?.title === 'Tarea desde el celular')
+    const widgetText = await js(widgets.get('habits'), `document.body.innerText`)
+    check('el widget de hábitos se actualiza con el cambio remoto', /Desde la PC/.test(widgetText ?? ''), (widgetText ?? '').slice(0, 80))
+
+    // Deleting on the PC deletes on the server.
+    hbs.remove(created.id)
+    await sleep(3500)
+    const remote3 = await api('GET', `/api/sync?since=0`)
+    const gone = remote3.docs.find((d) => d.collection === 'habits' && d.id === created.id)
+    check('borrar en la PC lo borra en el servidor', gone?.deleted === true)
+
+    // The settings the server needs for phone reminders went up too.
+    const settingsDoc = remote3.docs.find((d) => d.collection === 'habitSettings' && d.id === 'main')
+    check('ajustes de hábitos (zona horaria) en el servidor', !!settingsDoc?.data?.tz && settingsDoc.data.summaryTime === getConfig().modules.habits.settings.summaryTime, JSON.stringify(settingsDoc?.data))
+
+    // Link a phone from the Panel.
+    await js(panel, `document.querySelector('[data-testid="sync-pair"]').click(); true`)
+    await sleep(1500)
+    const code = await js(panel, `document.querySelector('[data-testid="sync-pair-code"]')?.textContent ?? ''`)
+    const qr = await js(panel, `!!document.querySelector('[data-testid="sync-pairing"] svg')`)
+    check('vincular celular: código y QR', /^[A-Z2-9]{4}-[A-Z2-9]{4}$/.test(code) && qr, code)
+    const claim = await fetch(`${syncUrl}/api/pair/claim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, name: 'iPhone del test' })
+    }).then((r) => r.json())
+    await sleep(4500)
+    const listed = await js(panel, `[...document.querySelectorAll('[data-testid="sync-device"]')].map((e) => e.textContent).join('|')`)
+    check('el celular aparece en el Panel', claim.ok && /iPhone del test/.test(listed) && !(await js(panel, `!!document.querySelector('[data-testid="sync-pairing"]')`)), listed)
+    await js(panel, `[...document.querySelectorAll('[data-testid="sync-device"] button')].find((b) => b.textContent.includes('Desvincular'))?.click(); true`)
+    await sleep(1500)
+    const revoked = await fetch(`${syncUrl}/api/me`, { headers: { Authorization: `Bearer ${claim.token}` } })
+    check('desvincular el celular desde el Panel', revoked.status === 401 && (await js(panel, `document.querySelectorAll('[data-testid="sync-device"]').length`)) === 0)
+
+    await js(panel, `document.querySelector('[data-testid="sync-disconnect"]').click(); true`)
+    await sleep(600)
+    check('desconectar', sync.status().connected === false && !!(await js(panel, `!!document.querySelector('[data-testid="sync-url"]')`)))
+  }
 
   updateGeneral({ theme: 'light' })
   await sleep(500)

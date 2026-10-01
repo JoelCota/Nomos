@@ -18,7 +18,9 @@
     "dist": "electron-vite build && electron-builder",
     "dist:win": "electron-vite build && electron-builder --win",
     "dist:mac": "electron-vite build && electron-builder --mac",
-    "dist:linux": "electron-vite build && electron-builder --linux"
+    "dist:linux": "electron-vite build && electron-builder --linux",
+    "dev:web": "vite --config web/vite.config.mjs",
+    "build:web": "vite build --config web/vite.config.mjs"
   },
   "dependencies": {
     "electron-store": "^10.0.1",
@@ -31,6 +33,7 @@
     "electron-builder": "^25.1.8",
     "electron-vite": "^2.3.0",
     "postcss": "^8.4.49",
+    "qrcode": "^1.5.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "recharts": "^2.15.0",

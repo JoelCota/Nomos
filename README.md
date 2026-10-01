@@ -55,6 +55,7 @@ Nomos pone en el escritorio tarjetas pequeñas, como los widgets de macOS. Cada 
   - su **opacidad**.
 - **Apariencia:** tema claro, oscuro o del sistema; ocho colores de acento; y fondo **de vidrio** (experimental, solo Windows 11 22H2 o posterior).
 - **Inicio:** abrir Nomos al iniciar Windows y *click-through*, que hace que los clics atraviesen los widgets.
+- **Sincronización** (opcional): conecta Nomos a tu propio servidor para usar tus hábitos y tareas desde otros dispositivos.
 
 También puedes hacer clic derecho sobre cualquier widget para cambiar estas opciones.
 
@@ -82,7 +83,28 @@ Nomos queda en la bandeja del sistema:
 
 ## Tus datos
 
-Todo se guarda en tu equipo, en `%APPDATA%\Nomos\nomos.json`. Nomos no usa internet ni cuentas.
+Todo se guarda en tu equipo, en `%APPDATA%\Nomos\nomos.json`. Nomos no usa internet ni cuentas, salvo que actives la sincronización.
+
+### Sincronización (opcional)
+
+Puedes publicar tu propio servidor de Nomos en Cloudflare: es gratis para uso personal y toma unos 10 minutos (guía en [`server/README.md`](server/README.md)). Luego lo conectas en **Panel → Sincronización** con su dirección y su token.
+
+- Se sincronizan tus hábitos, su registro diario, tus tareas y el historial del Pomodoro. Los ajustes y el aspecto de los widgets se quedan en cada equipo.
+- Los cambios se envían al momento y los de otros dispositivos llegan en menos de 30 segundos. Sin internet, Nomos sigue funcionando y sincroniza al volver.
+- Si el mismo dato cambia en dos sitios, gana el cambio más reciente.
+- El token se guarda cifrado con el sistema de Windows. Tus datos viven en tu cuenta de Cloudflare, no en la de terceros.
+
+### App del celular
+
+El mismo servidor sirve una **app para el iPhone** (o cualquier celular), sin App Store: se abre en Safari y se agrega a la pantalla de inicio.
+
+- **Hoy:** tus hábitos con su anillo de progreso, rachas y la última semana. Un toque marca un hábito, suma 1 o suma 5 minutos; también puedes corregir ayer.
+- **Mis hábitos:** crea, edita, reordena y elimina hábitos desde el celular (tipo, meta, días y recordatorios), sin prender la PC.
+- **Tareas:** agrega, completa y borra tareas. Aparecen en el Pomodoro de tu PC.
+- **Recordatorios:** las horas de tus hábitos y el resumen de la noche llegan como notificaciones, aunque la PC esté apagada. Puedes elegir que te avisen siempre, solo con la PC apagada o nunca.
+- **Siri:** con la app Atajos del iPhone puedes decir «Oye Siri, nueva tarea», «marcar hábito» o «cómo voy». La app te guía para armarlos (Ajustes → Siri y Atajos).
+
+Para vincularla: **Panel → Sincronización → Vincular un celular** y sigue los pasos (código o QR). Cada celular tiene su propia llave y se desvincula desde ahí. Guía completa en [`server/README.md`](server/README.md#la-app-del-celular).
 
 Si usabas la versión anterior (*Pomodoro Widget*), en el primer arranque Nomos copia tus ajustes, tareas e historial. El archivo antiguo se conserva como respaldo.
 
@@ -101,6 +123,7 @@ npm run dev
 | `npm run build` | Compila main, preload y renderer en `out/` |
 | `npm run dist:win` | Genera el instalador de Windows en `release/` |
 | `npm run dist:mac` / `npm run dist:linux` | Genera el paquete para macOS (`.dmg`) o Linux (`.AppImage`) |
+| `npm run build:web` / `npm run dev:web` | Compila la app del celular / la abre con recarga en caliente |
 
 ### Generar el instalador
 
@@ -134,6 +157,7 @@ Los resultados se escriben en `%TEMP%\nomos-selftest\debug.log`. Variables opcio
 | `NOMOS_TOAST_MS=2500` | Acorta lo que duran las tarjetas de aviso |
 | `NOMOS_FAKE_GLASS=1` | Simula que el equipo soporta el fondo de vidrio |
 | `NOMOS_SEPARATE_WINDOWS=1` | Usa un proceso por ventana en vez del proceso compartido (también sirve como plan B fuera del test) |
+| `NOMOS_TEST_SYNC_URL` / `NOMOS_TEST_SYNC_TOKEN` | Añade las pruebas de sincronización contra un servidor local (`node server/test/local-server.js 8799 token`) |
 
 ### Estructura
 
@@ -145,6 +169,7 @@ src/
 │   ├── toasts.js    Tarjetas de aviso
 │   ├── host.js      Proceso de renderizado compartido
 │   ├── native.js    Funciones de Windows (capa «Al fondo», vidrio) vía koffi
+│   ├── sync.js      Motor de sincronización con el servidor
 │   └── store.js     Configuración y migraciones
 ├── preload/         Puente IPC seguro
 ├── renderer/        Interfaz en React (widgets, Panel, tarjetas)
@@ -152,7 +177,9 @@ src/
 │   ├── clock/
 │   ├── pomodoro/
 │   └── habits/
-└── shared/          Código común (configuración, fechas)
+└── shared/          Código común (configuración, fechas, documentos de sincronización)
+server/              API de sincronización, celulares y recordatorios (Cloudflare Worker + D1), con sus pruebas
+web/                 App del celular (React, PWA); se compila en server/public
 ```
 
 ### Añadir un módulo
@@ -165,6 +192,7 @@ src/
    - mostrar tarjetas y notificaciones;
    - reproducir sonidos;
    - hablar con otros módulos.
+4. Para que sus datos se sincronicen, el servicio expone `sync: { collections, exportDocs(), importDocs(changes) }`. Las funciones de `src/shared/syncDocs.js` convierten listas y registros en documentos y de vuelta.
 
 El Panel, la bandeja, el menú contextual y la persistencia lo recogen solos.
 

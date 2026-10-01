@@ -1,0 +1,22 @@
+# Nomos sync API (Cloudflare Worker + D1). See server/README.md to deploy it.
+name = "nomos-api"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "nomos"
+# Replace with the id printed by `npx wrangler d1 create nomos`.
+database_id = "7653f8b2-bbc3-4ef6-8d3e-42f110819c69"
+migrations_dir = "migrations"
+
+# Habit reminders for linked phones: checked every minute.
+[triggers]
+crons = ["* * * * *"]
+
+# The phone app (built from web/ into public/ by `npm run build:web` at the
+# project root). /api/* always goes to the Worker.
+[assets]
+directory = "./public"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*"]
