@@ -2,10 +2,14 @@
   "name": "nomos",
   "productName": "Nomos",
   "version": "0.1.0",
-  "description": "Widgets de escritorio estilo macOS: reloj, Pomodoro y hábitos con recordatorios.",
+  "description": "Nomos",
   "type": "module",
   "main": "out/main/index.js",
   "author": "aroco",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JoelCota/Nomos.git"
+  },
   "license": "MIT",
   "scripts": {
     "dev": "electron-vite dev",
@@ -59,7 +63,11 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Nomos",
+      "artifactName": "Nomos-Setup-${version}.exe",
+      "deleteAppDataOnUninstall": false
     },
     "mac": {
       "target": [
@@ -77,6 +85,7 @@
     },
     "asarUnpack": [
       "node_modules/koffi/**"
-    ]
+    ],
+    "publish": null
   }
 }
