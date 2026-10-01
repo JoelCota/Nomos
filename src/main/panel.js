@@ -1,6 +1,7 @@
 // Control Panel: a regular (non-floating) window with module toggles and settings.
 import { BrowserWindow, nativeTheme } from 'electron'
 import { baseWebPreferences, loadView } from './views.js'
+import { windowIconPath } from './appIcon.js'
 
 let panel = null
 const alive = () => panel && !panel.isDestroyed()
@@ -23,6 +24,7 @@ export function openPanel(page, theme = 'system') {
     show: false,
     autoHideMenuBar: true,
     backgroundColor: dark ? '#161618' : '#f5f5f7',
+    icon: windowIconPath() ?? undefined,
     webPreferences: baseWebPreferences()
   })
   panel.setMenuBarVisibility(false)

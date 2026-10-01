@@ -1,6 +1,6 @@
-import { app, BrowserWindow, Tray, Menu, ipcMain, Notification, globalShortcut, nativeImage, nativeTheme } from 'electron'
+import { app, BrowserWindow, Tray, Menu, ipcMain, Notification, globalShortcut, nativeTheme } from 'electron'
 import { join } from 'path'
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs'
+import { mkdirSync, rmSync, writeFileSync } from 'fs'
 import { MANIFESTS, getManifest } from '../modules/manifests.js'
 import { SERVICES } from '../modules/registry.main.js'
 import { GENERAL_DEFAULTS, LAYER_LABELS, SIZE_LABELS, WIDGET_PAD, glassActive } from '../shared/config.js'
@@ -11,6 +11,7 @@ import { createToastManager } from './toasts.js'
 import { createWindowHost } from './host.js'
 import { openPanel, getPanel } from './panel.js'
 import { log, trimLog } from './log.js'
+import { trayImage, taskbarIsLight, iconPngPath } from './appIcon.js'
 import { IS_TEST, TOAST_MS } from './views.js'
 
 // ---------------------------------------------------------------------------
@@ -195,7 +196,7 @@ function createServiceContext(id) {
     // Sounds play in the shared host window, so they work with every widget hidden.
     playSound: (kind) => windowHost.playSound(kind),
     notify: (title, body) => {
-      if (Notification.isSupported()) new Notification({ title, body, silent: true }).show()
+      if (Notification.isSupported()) new Notification({ title, body, silent: true, icon: iconPngPath() ?? undefined }).show()
     },
     refreshTray: () => refreshTray(),
     // Show a notification card; onAction(actionId) runs when a button is pressed.
@@ -281,10 +282,15 @@ const showPanel = (page) => openPanel(page, config?.general.theme ?? GENERAL_DEF
 // ---------------------------------------------------------------------------
 // Tray
 
-const trayIconPath = () =>
-  [join(process.resourcesPath, 'resources', 'tray.png'), join(app.getAppPath(), 'resources', 'tray.png')].find((p) =>
-    existsSync(p)
-  ) ?? null
+// White glyph on a dark taskbar, black on a light one. Windows doesn't always
+// announce a taskbar-only theme change, so it's also re-checked every minute.
+let trayLight = null
+async function refreshTrayIcon() {
+  const light = await taskbarIsLight()
+  if (!tray || tray.isDestroyed() || light === trayLight) return
+  trayLight = light
+  tray.setImage(trayImage(light))
+}
 
 let trayTimer = null
 function refreshTray() {
@@ -335,8 +341,9 @@ function buildTrayMenu() {
 }
 
 function createTray() {
-  const p = trayIconPath()
-  tray = new Tray(p ? nativeImage.createFromPath(p) : nativeImage.createEmpty())
+  tray = new Tray(trayImage(false))
+  refreshTrayIcon()
+  setInterval(refreshTrayIcon, 60_000).unref?.()
   tray.on('click', () => {
     if (process.platform !== 'darwin') toggleAllWidgets()
   })
@@ -448,6 +455,7 @@ if (!hasLock) {
     await initNative(log)
     nativeTheme.on('updated', () => {
       for (const w of widgets.all()) setGlassDarkMode(w, isDark())
+      refreshTrayIcon()
     })
     config = loadConfig()
     for (const m of MANIFESTS) {
