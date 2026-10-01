@@ -1,5 +1,7 @@
 # Builds the Windows installer when a version tag (v1.2.3) is pushed and
-# attaches it to a GitHub Release. Can also be run by hand from the Actions tab.
+# publishes it as a GitHub Release. The release notes are the tag's message
+# (git tag -a vX.Y.Z -F notas.md), followed by the list of merged PRs.
+# Can also be run by hand from the Actions tab (installer only, no release).
 name: Release
 
 on:
@@ -15,6 +17,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -31,9 +35,21 @@ jobs:
           name: Nomos-Setup
           path: release/Nomos-Setup-*.exe
 
-      - name: Attach to release
+      # actions/checkout can turn an annotated tag into a lightweight one, so
+      # fetch it again to read its message.
+      - name: Release notes from the tag message
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+          git tag -l --format='%(contents)' "${GITHUB_REF_NAME}" > release-notes.md
+          cat release-notes.md
+
+      - name: Publish release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: release/Nomos-Setup-*.exe
+          name: Nomos ${{ github.ref_name }}
+          body_path: release-notes.md
           generate_release_notes: true
+          files: release/Nomos-Setup-*.exe
