@@ -1,16 +1,25 @@
+import { Suspense, lazy } from 'react'
 import useConfig from '../hooks/useConfig'
-import { RENDERERS } from '../../../modules/registry.renderer'
 import WidgetFrame from './WidgetFrame'
+import { glassActive } from '../../../shared/config'
+
+// Only the widget of this window's module is loaded.
+const WIDGETS = {
+  clock: lazy(() => import('../../../modules/clock/renderer/ClockWidget')),
+  pomodoro: lazy(() => import('../../../modules/pomodoro/renderer/PomodoroWidget')),
+  habits: lazy(() => import('../../../modules/habits/renderer/HabitsWidget'))
+}
 
 export default function WidgetApp({ moduleId }) {
   const config = useConfig()
-  const entry = RENDERERS[moduleId]
-  if (!config || !entry) return null
+  const Widget = WIDGETS[moduleId]
+  if (!config || !Widget) return null
   const mod = config.modules[moduleId]
-  const { Widget } = entry
   return (
-    <WidgetFrame>
-      <Widget size={mod.widget.size} settings={mod.settings} config={config} />
+    <WidgetFrame glass={glassActive(config)}>
+      <Suspense fallback={null}>
+        <Widget size={mod.widget.size} settings={mod.settings} config={config} />
+      </Suspense>
     </WidgetFrame>
   )
 }

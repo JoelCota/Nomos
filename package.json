@@ -17,7 +17,8 @@
     "dist:linux": "electron-vite build && electron-builder --linux"
   },
   "dependencies": {
-    "electron-store": "^10.0.1"
+    "electron-store": "^10.0.1",
+    "koffi": "^2.16.3"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",
@@ -40,7 +41,8 @@
       "buildResources": "build"
     },
     "files": [
-      "out/**"
+      "out/**",
+      "!node_modules/koffi/build/koffi/{darwin,freebsd,openbsd,linux,musl}_*/**"
     ],
     "extraResources": [
       {
@@ -72,6 +74,9 @@
       ],
       "icon": "build/icon.png",
       "category": "Utility"
-    }
+    },
+    "asarUnpack": [
+      "node_modules/koffi/**"
+    ]
   }
 }

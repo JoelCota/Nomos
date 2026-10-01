@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import { on } from '../../../renderer/src/lib/ipc'
-import { playChime } from '../../../renderer/src/lib/sound'
 import { formatTime } from '../../../shared/time'
 import ProgressRing from '../../../renderer/src/ui/ProgressRing'
 import { PHASE_LABELS, pomodoro, usePomodoroState } from './usePomodoro'
@@ -94,13 +93,12 @@ function PrimaryButton({ state, compact = false }) {
   )
 }
 
-// Transient message after a phase ends; also plays the chime.
+// Transient message after a phase ends (the chime is played by the main process).
 function useAlert() {
   const [msg, setMsg] = useState(null)
   const timer = useRef(null)
   useEffect(() => {
     const off = on('pomodoro:event', (e) => {
-      if (e.sound) playChime()
       clearTimeout(timer.current)
       setMsg(e.message)
       timer.current = setTimeout(() => setMsg(null), 4500)

@@ -2,8 +2,8 @@
 // transparent window, stacked in the top-right corner (newest on top). Cards
 // close by themselves after `durationMs` (paused while the mouse is over them);
 // beyond MAX_VISIBLE they wait in a queue.
-import { BrowserWindow, screen } from 'electron'
-import { baseWebPreferences, loadView } from './views.js'
+// Windows are opened through `openWindow` so cards share the widgets' process.
+import { screen } from 'electron'
 
 export const TOAST_CARD = { width: 340, height: 136 }
 const PAD = 12 // transparent margin for the card shadow (same as widgets)
@@ -12,7 +12,7 @@ const EDGE = 16
 const MAX_VISIBLE = 4
 const EXIT_MS = 220
 
-export function createToastManager({ log, durationMs = 10000 }) {
+export function createToastManager({ log, openWindow, durationMs = 10000 }) {
   const visible = [] // newest first
   const queue = []
   let seq = 0
@@ -46,7 +46,7 @@ export function createToastManager({ log, durationMs = 10000 }) {
   function open(t) {
     visible.unshift(t)
     const p = position(0)
-    const win = new BrowserWindow({
+    const options = {
       x: p.x,
       y: p.y,
       width: winW,
@@ -64,20 +64,35 @@ export function createToastManager({ log, durationMs = 10000 }) {
       skipTaskbar: true,
       focusable: false, // never steal focus from what you are doing
       alwaysOnTop: true,
-      show: false,
-      webPreferences: baseWebPreferences()
-    })
-    win.setAlwaysOnTop(true, 'screen-saver')
-    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
-    t.win = win
-    win.once('ready-to-show', () => {
-      if (!alive(win)) return
-      win.showInactive()
-      startTimer(t)
-    })
-    win.webContents.on('did-fail-load', (_e, code, desc) => log('[toast] did-fail-load', code, desc))
-    loadView(win, { view: 'toast', id: t.id })
+      show: false
+    }
     layout()
+    openWindow(options, { view: 'toast', id: t.id })
+      .then((win) => {
+        // Closed (or dismissed) before its window finished opening.
+        if (!visible.includes(t)) {
+          win.destroy()
+          return
+        }
+        t.win = win
+        win.setAlwaysOnTop(true, 'screen-saver')
+        win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+        layout()
+        let shown = false
+        const show = () => {
+          if (shown || !alive(win)) return
+          shown = true
+          win.showInactive()
+          startTimer(t)
+        }
+        win.once('ready-to-show', show)
+        win.webContents.once('did-finish-load', () => setTimeout(show, 300))
+        win.webContents.on('did-fail-load', (_e, code, desc) => log('[toast] did-fail-load', code, desc))
+      })
+      .catch((err) => {
+        log(`[toast] could not open: ${String(err)}`)
+        close(t.id, 'error')
+      })
   }
 
   function close(id, reason = 'dismiss') {
