@@ -102,18 +102,27 @@ function commit(prev) {
     const was = prev ? prev.modules[m.id].enabled : false
     const now = config.modules[m.id].enabled
     const svc = services.get(m.id)
+    // start/stop/onSettingsChanged are optional, and one module failing must
+    // never stop the others (or sync) from starting.
+    const safely = (what, fn) => {
+      try {
+        fn()
+      } catch (err) {
+        log(`[main] module ${m.id} ${what} failed: ${err?.stack ?? err}`)
+      }
+    }
     if (now && !was) {
-      svc?.start()
-      registerModuleShortcuts(m.id)
+      safely('start', () => svc?.start?.())
+      safely('shortcuts', () => registerModuleShortcuts(m.id))
       if (prev) syncEngine?.localChanged()
     } else if (!now && was) {
-      svc?.stop()
+      safely('stop', () => svc?.stop?.())
       unregisterModuleShortcuts(m.id)
     } else if (now && svc && prev) {
       const a = JSON.stringify(prev.modules[m.id].settings)
       const b = JSON.stringify(config.modules[m.id].settings)
       if (a !== b) {
-        svc.onSettingsChanged(config.modules[m.id].settings, prev.modules[m.id].settings)
+        safely('settings', () => svc.onSettingsChanged?.(config.modules[m.id].settings, prev.modules[m.id].settings))
         syncEngine?.localChanged() // some settings are synced (e.g. habitSettings)
       }
     }

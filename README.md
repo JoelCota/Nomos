@@ -26,8 +26,14 @@ Nomos pone en el escritorio tarjetas pequeñas, como los widgets de macOS. Cada 
 ### 🍅 Pomodoro
 - Temporizador de foco con descansos cortos y largos, y duraciones configurables.
 - Sigue contando aunque el widget esté oculto, porque el tiempo corre en el proceso principal.
-- Lista de tareas y estadísticas en el Panel. Cada sesión puede ir a una tarea o a un hábito de duración, y al terminar se suman los minutos.
 - Sonido y notificación al terminar cada fase. Opción para empezar la siguiente fase automáticamente.
+- Estadísticas en el Panel. Cada sesión puede ir a una tarea (del módulo Tareas) o a un hábito de duración, y al terminar se suman los focos o los minutos.
+
+### 📋 Tareas
+
+- Lista de tareas con su propio widget (pequeño, mediano y grande) y su página en el Panel.
+- Se pueden marcar desde el widget; con el Pomodoro activo, cada tarea tiene un botón ▶ para elegirla como objetivo del foco. También se ven y gestionan en la pestaña «Tareas» del Pomodoro.
+- Cada tarea cuenta los focos (🍅) que le dedicas. Se sincronizan con la app del celular.
 
 ### ✅ Hábitos
 - **Tipos:** sí/no, contador con meta diaria (p. ej. 8 vasos de agua), minutos y meta semanal (p. ej. correr 3 veces por semana).

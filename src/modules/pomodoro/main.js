@@ -32,13 +32,9 @@ export default function createPomodoroService(ctx) {
   let pausedMs = null // exact ms left when paused
 
   // ---- data ----
-  const tasks = () => ctx.data.get('tasks', [])
+  // Tasks belong to the Tasks module; null while that module is disabled.
+  const tasksApi = () => ctx.getService('tasks')
   const history = () => ctx.data.get('history', [])
-  const setTasks = (t) => {
-    ctx.data.set('tasks', t)
-    broadcastData()
-    return t
-  }
 
   const todayStats = () => {
     const today = history().filter((h) => h.mode === 'work' && isToday(h.completedAt))
@@ -54,7 +50,7 @@ export default function createPomodoroService(ctx) {
       const habit = ctx.getService('habits')?.getHabit(id.slice(HABIT_PREFIX.length))
       return habit?.type === 'duration' ? { kind: 'habit', id: habit.id, title: `${habit.icon} ${habit.name}` } : null
     }
-    const task = tasks().find((t) => t.id === id)
+    const task = tasksApi()?.getTask(id)
     return task ? { kind: 'task', id: task.id, title: task.title } : null
   }
 
@@ -73,7 +69,7 @@ export default function createPomodoroService(ctx) {
     ctx.broadcast('state', snapshot())
     ctx.refreshTray()
   }
-  const broadcastData = () => ctx.broadcast('data', { tasks: tasks(), history: history() })
+  const broadcastData = () => ctx.broadcast('data', { history: history() })
 
   // ---- timer ----
   const clear = () => {
@@ -139,7 +135,7 @@ export default function createPomodoroService(ctx) {
   function recordFocus() {
     const target = resolveTarget(state.currentTaskId)
     if (target?.kind === 'task') {
-      setTasks(tasks().map((t) => (t.id === target.id ? { ...t, pomodoros: (t.pomodoros ?? 0) + 1 } : t)))
+      tasksApi()?.addPomodoro(target.id)
     } else if (target?.kind === 'habit') {
       ctx.getService('habits')?.addMinutes(target.id, Math.round(dur('work') / 60))
     }
@@ -225,29 +221,7 @@ export default function createPomodoroService(ctx) {
   ctx.handle('switch-phase', (phase) => switchPhase(phase))
   ctx.handle('select-task', (id) => selectTask(id))
 
-  ctx.handle('get-data', () => ({ tasks: tasks(), history: history() }))
-  ctx.handle('task-add', (title) => {
-    const clean = String(title ?? '').trim().slice(0, 200)
-    if (!clean) return tasks()
-    return setTasks([
-      ...tasks(),
-      { id: crypto.randomUUID(), title: clean, done: false, pomodoros: 0, createdAt: new Date().toISOString() }
-    ])
-  })
-  ctx.handle('task-update', (id, patch) => {
-    const allowed = {}
-    if (typeof patch?.done === 'boolean') allowed.done = patch.done
-    if (typeof patch?.title === 'string' && patch.title.trim()) allowed.title = patch.title.trim().slice(0, 200)
-    const next = setTasks(tasks().map((t) => (t.id === id ? { ...t, ...allowed } : t)))
-    emit()
-    return next
-  })
-  ctx.handle('task-remove', (id) => {
-    if (state.currentTaskId === id) state = { ...state, currentTaskId: null }
-    const next = setTasks(tasks().filter((t) => t.id !== id))
-    emit()
-    return next
-  })
+  ctx.handle('get-data', () => ({ history: history() }))
   ctx.handle('history-clear', () => {
     ctx.data.set('history', [])
     broadcastData()
@@ -291,15 +265,20 @@ export default function createPomodoroService(ctx) {
     shortcuts: { 'Alt+Shift+P': toggle },
     // Used by other modules through ctx.getService('pomodoro').
     api: {
-      isFocusing: () => state.phase === 'work' && state.running
+      isFocusing: () => state.phase === 'work' && state.running,
+      // The Tasks module calls this when a task is renamed, finished or removed:
+      // drop a target that no longer exists and refresh the title shown.
+      refresh: () => {
+        if (state.currentTaskId && !resolveTarget(state.currentTaskId)) state = { ...state, currentTaskId: null }
+        emit()
+      }
     },
-    // Sync with the Nomos server: tasks (in order) and finished focus sessions.
+    // Sync with the Nomos server: finished focus sessions (tasks sync from the Tasks module).
     sync: {
-      collections: ['tasks', 'focusSessions'],
-      exportDocs: () => ({ tasks: listToDocs(tasks(), { order: true }), focusSessions: listToDocs(history()) }),
+      collections: ['focusSessions'],
+      exportDocs: () => ({ focusSessions: listToDocs(history()) }),
       importDocs(changes) {
         const g = groupByCollection(changes)
-        if (g.tasks) ctx.data.set('tasks', applyListDocs(tasks(), g.tasks, { order: true }))
         if (g.focusSessions) ctx.data.set('history', applyListDocs(history(), g.focusSessions, { sortBy: (h) => h.completedAt ?? '' }))
         broadcastData()
         emit()

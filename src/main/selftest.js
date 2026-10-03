@@ -22,7 +22,7 @@ export async function runSelfTest({ getConfig, updateModule, updateGeneral, togg
   const cfg = getConfig()
   check('migración: duración del foco', cfg.modules.pomodoro.settings.durations.work === 30)
   check('migración: tema', cfg.general.theme === 'dark')
-  check('migración: tareas', getData('pomodoro', 'tasks', []).some((t) => t.id === 'seed-task'))
+  check('migración: tareas', getData('tasks', 'items', []).some((t) => t.id === 'seed-task'))
   check('migración: respaldo v1 y claves viejas borradas', hasStoreKey('_v1Backup') && !hasStoreKey('settings'))
 
   // --- widgets ---
@@ -62,9 +62,9 @@ export async function runSelfTest({ getConfig, updateModule, updateGeneral, togg
   const pidOf = (w) => w.webContents.getOSProcessId()
   const hostPid = windowHost.webContents()?.getOSProcessId()
   const widgetPids = widgets.all().map(pidOf)
-  check('los widgets comparten un solo proceso', windowHost.isShared() && widgetPids.length === 3 && widgetPids.every((p) => p === hostPid), widgetPids.join(','))
+  check('los widgets comparten un solo proceso', windowHost.isShared() && widgetPids.length === 4 && widgetPids.every((p) => p === hostPid), widgetPids.join(','))
   const tabs = () => app.getAppMetrics().filter((m) => m.type === 'Tab').length
-  check('un único proceso de renderizado para 3 widgets', tabs() === 1, tabs())
+  check('un único proceso de renderizado para 4 widgets', tabs() === 1, tabs())
 
   toggleAllWidgets()
   await sleep(500)
@@ -116,7 +116,7 @@ export async function runSelfTest({ getConfig, updateModule, updateGeneral, togg
   await sleep(1700)
   const s1 = snap()
   check('con widget oculto el foco termina y arranca el descanso', s1.phase === 'short' && s1.cycleCount === 1 && s1.running, `${s1.phase} ${s1.cycleCount} ${s1.running}`)
-  check('tarea +1 pomodoro', getData('pomodoro', 'tasks', []).find((t) => t.id === 'seed-task')?.pomodoros === 3)
+  check('tarea +1 pomodoro', getData('tasks', 'items', []).find((t) => t.id === 'seed-task')?.pomodoros === 3)
   check('historial registrado', getData('pomodoro', 'history', []).length === 1)
   const soundsAfter = await windowHost.webContents().executeJavaScript('window.__sounds ?? 0')
   check('el sonido suena con el widget oculto', soundsAfter === soundsBefore + 1, `${soundsBefore} -> ${soundsAfter}`)
@@ -124,6 +124,19 @@ export async function runSelfTest({ getConfig, updateModule, updateGeneral, togg
   await sleep(2500)
   const phaseText = await js(widgets.get('pomodoro'), `document.querySelector('[data-testid="pomodoro-phase"]')?.textContent ?? ''`)
   check('al volver a mostrarlo, el widget trae el estado actual', /descanso/i.test(phaseText), phaseText)
+
+  // --- Tasks module: its own widget, shared with the Pomodoro ---
+  const tasksText = await js(widgets.get('tasks'), `document.body.innerText`)
+  check('widget de tareas muestra la tarea migrada', /Tarea migrada/.test(tasksText ?? ''), (tasksText ?? '').slice(0, 80))
+  svc.debug.selectTask('seed-task')
+  check('el pomodoro usa la tarea del módulo Tareas', snap().taskTitle === 'Tarea migrada', snap().taskTitle)
+  updateModule('tasks', { enabled: false })
+  await sleep(500)
+  check('sin módulo Tareas: sin widget y el pomodoro no ve la tarea', widgets.get('tasks') === null && snap().taskTitle === null)
+  updateModule('tasks', { enabled: true })
+  await sleep(2500)
+  check('reactivar Tareas conserva sus datos', services.get('tasks').debug.find('seed-task')?.pomodoros === 3)
+  check('…y el widget vuelve a abrirse', !!widgets.get('tasks')?.isVisible())
 
   svc.debug.setRemaining(1)
   await sleep(1700)
@@ -402,8 +415,16 @@ export async function runSelfTest({ getConfig, updateModule, updateGeneral, togg
     await js(panel, `document.querySelector('[data-testid="sync-now"]').click(); true`)
     await sleep(2500)
     check('lo marcado en el celular llega a la PC', hbs.payload().log[today]?.[created.id] === 1)
-    const tasks = services.get('pomodoro').sync.exportDocs().tasks
+    const tasks = services.get('tasks').sync.exportDocs().tasks
     check('la tarea del celular llega a la PC', tasks['from-phone']?.title === 'Tarea desde el celular')
+    // A task added by voice (Siri / Atajos) reaches the Tasks module and its widget.
+    const siri = await api('POST', '/api/quick/task', { title: 'Tarea dictada a Siri.' })
+    await js(panel, `document.querySelector('[data-testid="sync-now"]').click(); true`)
+    await sleep(2500)
+    const viaSiri = Object.values(services.get('tasks').sync.exportDocs().tasks).find((t) => t.title === 'Tarea dictada a Siri')
+    check('tarea dictada a Siri llega al módulo Tareas', siri.ok && !!viaSiri, JSON.stringify(siri))
+    const tasksWidget = await js(widgets.get('tasks'), `document.body.innerText`)
+    check('…y aparece en el widget de Tareas', /Tarea dictada a Siri/.test(tasksWidget ?? ''), (tasksWidget ?? '').slice(0, 120))
     const widgetText = await js(widgets.get('habits'), `document.body.innerText`)
     check('el widget de hábitos se actualiza con el cambio remoto', /Desde la PC/.test(widgetText ?? ''), (widgetText ?? '').slice(0, 80))
 

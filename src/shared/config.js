@@ -6,9 +6,10 @@
 // }
 //
 // Module data (tasks, history, habits...) lives separately under `data.<id>` in the store.
+// Schema v3: the tasks moved from `data.pomodoro.tasks` to `data.tasks.items` (their own module).
 import { mergeDeep } from './merge.js'
 
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 3
 
 // Card sizes in px, modelled on macOS widget families (small / medium / large).
 export const CARD_SIZES = {
@@ -138,10 +139,8 @@ export function migrateV1({ settings, tasks, history, windowBounds } = {}) {
       }
     },
     data: {
-      pomodoro: {
-        tasks: Array.isArray(tasks) ? tasks : [],
-        history: Array.isArray(history) ? history : []
-      }
+      tasks: { items: Array.isArray(tasks) ? tasks : [] },
+      pomodoro: { history: Array.isArray(history) ? history : [] }
     }
   }
 }

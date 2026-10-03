@@ -7,6 +7,7 @@ import { glassActive } from '../../../shared/config'
 const WIDGETS = {
   clock: lazy(() => import('../../../modules/clock/renderer/ClockWidget')),
   pomodoro: lazy(() => import('../../../modules/pomodoro/renderer/PomodoroWidget')),
+  tasks: lazy(() => import('../../../modules/tasks/renderer/TasksWidget')),
   habits: lazy(() => import('../../../modules/habits/renderer/HabitsWidget'))
 }
 

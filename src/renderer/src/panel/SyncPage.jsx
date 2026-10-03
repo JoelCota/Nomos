@@ -9,7 +9,8 @@ const INPUT =
 // What each module sends to the server.
 const SYNCED = [
   { id: 'habits', label: 'Hábitos y su registro diario' },
-  { id: 'pomodoro', label: 'Tareas e historial del Pomodoro' }
+  { id: 'tasks', label: 'Tareas' },
+  { id: 'pomodoro', label: 'Historial de focos del Pomodoro' }
 ]
 
 function ago(iso, now) {

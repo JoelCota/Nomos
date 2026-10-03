@@ -65,6 +65,14 @@ function migrate(st) {
     for (const k of V1_KEYS) st.delete(k)
     migrationInfo = { from: 1, to: SCHEMA_VERSION }
   }
+  // v2 -> v3: the tasks moved out of the Pomodoro into their own module.
+  const legacyTasks = st.get('data.pomodoro.tasks')
+  if (Array.isArray(legacyTasks)) {
+    if (!st.has('data.tasks.items')) st.set('data.tasks.items', legacyTasks)
+    st.set('_v2Backup', { ...(st.get('_v2Backup') ?? {}), tasks: legacyTasks })
+    st.delete('data.pomodoro.tasks')
+    migrationInfo ??= { from: 2, to: SCHEMA_VERSION }
+  }
   st.set('schemaVersion', SCHEMA_VERSION)
 }
 
