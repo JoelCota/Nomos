@@ -93,7 +93,32 @@ Todo se guarda en tu equipo, en `%APPDATA%\Nomos\nomos.json`. Nomos no usa inter
 
 ### Sincronización (opcional)
 
-Puedes publicar tu propio servidor de Nomos en Cloudflare: es gratis para uso personal y toma unos 10 minutos (guía en [`server/README.md`](server/README.md)). Luego lo conectas en **Panel → Sincronización** con su dirección y su token.
+Puedes publicar tu propio servidor de Nomos en Cloudflare (Workers + base de datos D1): es gratis para uso personal y toma unos 10 minutos. Luego lo conectas en **Panel → Sincronización** con su dirección y su token. La guía detallada está en [`server/README.md`](server/README.md).
+
+#### Instalar el servidor en Cloudflare
+
+Necesitas Node.js 20+ y una cuenta gratuita de [Cloudflare](https://dash.cloudflare.com/sign-up). No hace falta dominio propio: el servidor queda en una dirección `*.workers.dev`. En PowerShell, desde la carpeta del proyecto:
+
+```powershell
+npm install
+cd server
+npm install
+npx wrangler login                                  # autoriza Wrangler en el navegador
+npx wrangler d1 create nomos                        # copia el database_id a server/wrangler.toml
+npx wrangler d1 migrations apply nomos --remote     # crea las tablas
+node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"   # tu token: guárdalo
+npx wrangler secret put NOMOS_TOKEN                 # pega el token
+npm run deploy                                      # compila la app del celular y publica
+```
+
+1. Al terminar, Wrangler muestra la dirección, algo como `https://nomos-api.tu-cuenta.workers.dev`. Abre `/api/health` en esa dirección: debe responder `{"ok":true,"app":"nomos",...}`.
+2. En Nomos: **Panel → Sincronización**, pega la dirección y el token, y pulsa **Conectar**. Lo que ya tienes en la PC se sube al servidor.
+3. Para el celular: **Vincular un celular** y sigue los pasos (ver abajo).
+
+**Actualizar el servidor** cuando salga una versión nueva de Nomos: repite `npm install`, `cd server`, `npm install`, `npx wrangler d1 migrations apply nomos --remote` y `npm run deploy`. Las migraciones ya aplicadas se saltan solas.
+
+> [!TIP]
+> Si Wrangler falla con el error `7403`, es un problema de cuenta o permisos: revisa con `npx wrangler whoami` y `npx wrangler d1 list`, y si hace falta vuelve a iniciar sesión con `npx wrangler login`.
 
 - Se sincronizan tus hábitos, su registro diario, tus tareas y el historial del Pomodoro. Los ajustes y el aspecto de los widgets se quedan en cada equipo.
 - Los cambios se envían al momento y los de otros dispositivos llegan en menos de 30 segundos. Sin internet, Nomos sigue funcionando y sincroniza al volver.

@@ -33,7 +33,7 @@ npx wrangler login
 npx wrangler d1 create nomos
 ```
 
-Copia el `database_id` que aparece y pégalo en `wrangler.toml`, en lugar de `00000000-0000-0000-0000-000000000000`. Si Wrangler pregunta si quiere añadir la base de datos a tu configuración, responde **No**: ya está en el archivo.
+Copia el `database_id` que aparece y pégalo en `wrangler.toml`, en `database_id`, reemplazando el valor que ya hay. Si Wrangler pregunta si quiere añadir la base de datos a tu configuración, responde **No**: ya está en el archivo.
 
 **3. Crea las tablas:**
 
